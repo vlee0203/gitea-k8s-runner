@@ -24,8 +24,12 @@ import (
 )
 
 const (
-	pollInterval = 3 * time.Second
-	errorBackoff = 10 * time.Second
+	pollInterval     = 3 * time.Second
+	errorBackoff     = 10 * time.Second
+	podWatchInterval = 10 * time.Second
+	// reportGrace is how long to wait for a final report after the pod ends
+	// before treating the job as unreported.
+	reportGrace = 15 * time.Second
 )
 
 // Worker owns one runner identity for one pool and up to Pool.Slots in-flight jobs.
@@ -119,14 +123,41 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 		}
 	}()
 
-	select {
-	case <-a.Done():
-	case <-ctx.Done():
-		// Shutdown cut this job short. The task is already claimed, so it cannot
-		// be handed to another runner; fail it so Gitea can rerun it.
-		if _, err := w.client.UpdateTask(context.WithoutCancel(ctx), &runnerv1.TaskState{Id: t.Id, Result: runnerv1.Result_RESULT_FAILURE}, nil); err != nil {
-			log.Printf("worker %v: fail job %s cut short by shutdown: %v", w.pool.Labels, id, err)
+	// Wait for the executor to report a terminal state. A pod that dies without
+	// reporting (OOMKilled, evicted) would otherwise leave the slot occupied and
+	// the task stuck until Gitea's own timeout, so watch the pod too.
+	watch := time.NewTicker(podWatchInterval)
+	defer watch.Stop()
+	for {
+		select {
+		case <-a.Done():
+			return
+		case <-ctx.Done():
+			w.fail(ctx, t.Id, id, "cut short by shutdown")
+			return
+		case <-watch.C:
+			phase, err := w.exec.Phase(ctx, id)
+			if err != nil {
+				log.Printf("worker %v: watch executor %s: %v", w.pool.Labels, id, err)
+				continue
+			}
+			if phase == corev1.PodSucceeded || phase == corev1.PodFailed || phase == "" {
+				// Give the last report a moment to arrive before deciding it never will.
+				select {
+				case <-a.Done():
+				case <-time.After(reportGrace):
+					w.fail(ctx, t.Id, id, "executor ended without reporting a result")
+				}
+				return
+			}
 		}
+	}
+}
+
+// fail marks an already-claimed task as failed so Gitea can rerun it.
+func (w *Worker) fail(ctx context.Context, taskID int64, id, why string) {
+	if _, err := w.client.UpdateTask(context.WithoutCancel(ctx), &runnerv1.TaskState{Id: taskID, Result: runnerv1.Result_RESULT_FAILURE}, nil); err != nil {
+		log.Printf("worker %v: fail job %s (%s): %v", w.pool.Labels, id, why, err)
 	}
 }
 

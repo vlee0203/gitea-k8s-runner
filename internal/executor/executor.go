@@ -108,6 +108,18 @@ func (m *Manager) List(ctx context.Context) ([]string, error) {
 	return ids, nil
 }
 
+// Phase returns the executor pod's phase, or "" if the pod no longer exists.
+func (m *Manager) Phase(ctx context.Context, assignmentID string) (corev1.PodPhase, error) {
+	pod, err := m.cs.CoreV1().Pods(m.namespace).Get(ctx, "gkr-"+assignmentID, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return pod.Status.Phase, nil
+}
+
 // Delete removes an assignment's pod and capability Secret. Missing resources
 // are not an error.
 func (m *Manager) Delete(ctx context.Context, assignmentID string) error {
