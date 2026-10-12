@@ -44,6 +44,11 @@ type Config struct {
 	WorkerName            string // base name of the registered runner
 	StateSecretName       string // Secret persisting this worker's runner identity
 	ImagePullSecret       string // imagePullSecret for private executor images ("" = none)
+	// CacheServerURL and CacheServerSecret, when set, point executor jobs at a
+	// shared actions cache server. Each executor is a fresh pod, so without one
+	// every job starts with a cold cache.
+	CacheServerURL    string
+	CacheServerSecret string
 	// ShutdownTimeout is how long in-flight jobs may drain before they are
 	// cancelled. Must not exceed the pod's terminationGracePeriodSeconds.
 	ShutdownTimeout time.Duration
@@ -70,7 +75,15 @@ func Load() (*Config, error) {
 		WorkerName:            env("WORKER_NAME", "gitea-k8s-runner"),
 		StateSecretName:       env("STATE_SECRET_NAME", "gitea-k8s-runner-state"),
 		ImagePullSecret:       env("IMAGE_PULL_SECRET", ""),
+		CacheServerURL:        env("CACHE_SERVER_URL", ""),
 		ShutdownTimeout:       30 * time.Minute,
+	}
+	if f := env("CACHE_SERVER_SECRET_FILE", ""); f != "" {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, fmt.Errorf("read cache server secret %s: %w", f, err)
+		}
+		c.CacheServerSecret = strings.TrimSpace(string(b))
 	}
 	if v := env("SHUTDOWN_TIMEOUT", ""); v != "" {
 		d, err := time.ParseDuration(v)
@@ -105,4 +118,15 @@ func Load() (*Config, error) {
 	}
 	c.Pools = p.Pools
 	return c, nil
+}
+
+// CacheConfigYAML is the runner config fragment that points an executor job at
+// the shared cache server, so every one-shot pod reads and writes the same
+// actions cache. Empty when no external cache server is configured.
+func (c *Config) CacheConfigYAML() string {
+	if c.CacheServerURL == "" || c.CacheServerSecret == "" {
+		return ""
+	}
+	return fmt.Sprintf("cache:\n  external_server: %q\n  external_secret: %q\n",
+		c.CacheServerURL, c.CacheServerSecret)
 }

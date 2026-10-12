@@ -27,8 +27,11 @@ const (
 	WorkflowAnnotation = "gitea-k8s-runner/workflow"
 )
 
-// CapabilityKey is the Secret key holding the assignment capability.
-const CapabilityKey = "capability"
+// Secret keys: the assignment capability, and an optional runner config file.
+const (
+	CapabilityKey = "capability"
+	ConfigKey     = "config.yaml"
+)
 
 // namePrefix starts every executor pod/secret name.
 const namePrefix = "gitea-runner"
@@ -46,6 +49,9 @@ type Spec struct {
 	Resources    corev1.ResourceRequirements
 	// ImagePullSecret, when set, is used to pull the executor image.
 	ImagePullSecret string
+	// RunnerConfig, when set, is written as the runner's config.yaml so the job
+	// uses shared infrastructure (e.g. the actions cache server).
+	RunnerConfig string
 	// ActiveDeadlineSeconds, when > 0, bounds how long the pod may run.
 	ActiveDeadlineSeconds int64
 
@@ -143,13 +149,28 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 	labels := labelsFor(s)
 	annotations := annotationsFor(s)
 
+	data := map[string]string{CapabilityKey: s.Capability}
+	if s.RunnerConfig != "" {
+		data[ConfigKey] = s.RunnerConfig
+	}
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: m.namespace, Labels: labels, Annotations: annotations},
 		Type:       corev1.SecretTypeOpaque,
-		StringData: map[string]string{CapabilityKey: s.Capability},
+		StringData: data,
 	}
 	if _, err := m.cs.CoreV1().Secrets(m.namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create capability secret: %w", err)
+	}
+
+	env := []corev1.EnvVar{
+		{Name: "GITEA_INSTANCE_URL", Value: s.FacadeURL},
+		{Name: "GITEA_RUNNER_REGISTRATION_TOKEN_FILE", Value: "/etc/gkr/" + CapabilityKey},
+		{Name: "GITEA_RUNNER_LABELS", Value: strings.Join(s.Labels, ",")},
+		{Name: "GITEA_RUNNER_NAME", Value: runnerName(s)},
+		{Name: "GITEA_RUNNER_EPHEMERAL", Value: "true"},
+	}
+	if s.RunnerConfig != "" {
+		env = append(env, corev1.EnvVar{Name: "CONFIG_FILE", Value: "/etc/gkr/" + ConfigKey})
 	}
 
 	pod := &corev1.Pod{
@@ -159,16 +180,10 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 			ActiveDeadlineSeconds: positiveOrNil(s.ActiveDeadlineSeconds),
 			ImagePullSecrets:      pullSecrets(s.ImagePullSecret),
 			Containers: []corev1.Container{{
-				Name:      "runner",
-				Image:     s.Image,
-				Resources: s.Resources,
-				Env: []corev1.EnvVar{
-					{Name: "GITEA_INSTANCE_URL", Value: s.FacadeURL},
-					{Name: "GITEA_RUNNER_REGISTRATION_TOKEN_FILE", Value: "/etc/gkr/capability"},
-					{Name: "GITEA_RUNNER_LABELS", Value: strings.Join(s.Labels, ",")},
-					{Name: "GITEA_RUNNER_NAME", Value: runnerName(s)},
-					{Name: "GITEA_RUNNER_EPHEMERAL", Value: "true"},
-				},
+				Name:         "runner",
+				Image:        s.Image,
+				Resources:    s.Resources,
+				Env:          env,
 				VolumeMounts: []corev1.VolumeMount{{Name: "capability", MountPath: "/etc/gkr", ReadOnly: true}},
 			}},
 			Volumes: []corev1.Volume{{

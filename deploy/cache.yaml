@@ -1,0 +1,88 @@
+# 可选：共享的 actions cache 服务器。与 deploy/namespace/ 或 deploy/cluster/ 一并 apply。
+#
+# 每个 executor 都是全新 Pod，缓存默认是 Pod 本地的，跨 job 永不命中。跑一个常驻
+# cache-server（用同一个 runner 镜像的 cache-server 子命令），并把 controller 的
+# CACHE_SERVER_URL / CACHE_SERVER_SECRET_FILE 指向它，所有 job 就共用一份缓存。
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitea-runner-cache
+type: Opaque
+stringData:
+  # openssl rand -hex 32
+  secret: REPLACE_ME
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitea-runner-cache-config
+data:
+  # 值与上面的 Secret 同源：从环境读，避免两处维护。
+  config.yaml: |
+    cache:
+      external_secret: ${CACHE_SECRET}
+---
+# 缓存要能被后续 job 命中，就必须跨 Pod 存活。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gitea-runner-cache
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gitea-runner-cache
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: gitea-runner-cache }
+  template:
+    metadata:
+      labels: { app: gitea-runner-cache }
+    spec:
+      imagePullSecrets:
+        - name: ghcr-pull
+      containers:
+        - name: cache
+          image: ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest
+          command:
+            - /usr/local/bin/gitea-runner
+            - cache-server
+            - --config
+            - /etc/cache/config.yaml
+            - --dir
+            - /cache
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8088"
+          env:
+            - name: CACHE_SECRET
+              valueFrom:
+                secretKeyRef: { name: gitea-runner-cache, key: secret }
+          ports:
+            - { name: http, containerPort: 8088 }
+          volumeMounts:
+            - { name: cache, mountPath: /cache }
+            - { name: config, mountPath: /etc/cache, readOnly: true }
+      volumes:
+        - name: cache
+          persistentVolumeClaim: { claimName: gitea-runner-cache }
+        - name: config
+          configMap: { name: gitea-runner-cache-config }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitea-runner-cache
+spec:
+  selector: { app: gitea-runner-cache }
+  ports:
+    - { name: http, port: 8088, targetPort: http }
