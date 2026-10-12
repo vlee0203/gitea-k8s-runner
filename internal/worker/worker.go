@@ -18,6 +18,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	runnerv1 "gitea.dev/actionslib/runner/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/vlee0203/gitea-k8s-runner/internal/config"
 	"github.com/vlee0203/gitea-k8s-runner/internal/executor"
@@ -209,9 +210,16 @@ func taskContext(t *runnerv1.Task) (repo, runID, job, workflow string) {
 		f["job"].GetStringValue(), f["workflow"].GetStringValue()
 }
 
-// fail marks an already-claimed task as failed so Gitea can rerun it.
+// fail marks an already-claimed task as failed and records why in the job log.
+// A task that never reached a pod has no other log output, so without this the
+// job would fail with an empty log and no explanation.
 func (w *Worker) fail(ctx context.Context, taskID int64, id, why string) {
-	if _, err := w.client.UpdateTask(context.WithoutCancel(ctx), &runnerv1.TaskState{Id: taskID, Result: runnerv1.Result_RESULT_FAILURE}, nil); err != nil {
+	ctx = context.WithoutCancel(ctx)
+	rows := []*runnerv1.LogRow{{Time: timestamppb.Now(), Content: "##[error] " + why}}
+	if _, err := w.client.UpdateLog(ctx, taskID, 0, rows, true); err != nil {
+		log.Printf("worker %v: write failure log for job %s: %v", w.pool.Labels, id, err)
+	}
+	if _, err := w.client.UpdateTask(ctx, &runnerv1.TaskState{Id: taskID, Result: runnerv1.Result_RESULT_FAILURE}, nil); err != nil {
 		log.Printf("worker %v: fail job %s (%s): %v", w.pool.Labels, id, why, err)
 	}
 }
