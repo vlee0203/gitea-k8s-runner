@@ -134,6 +134,13 @@ func resources(r config.ResourceLimits) corev1.ResourceRequirements {
 			limits[corev1.ResourceMemory] = q
 		}
 	}
+	// Ephemeral storage must be set explicitly wherever a LimitRange imposes a
+	// small default (e.g. 100Mi), or a checkout would fill it.
+	if r.EphemeralStorage != "" {
+		if q, err := resource.ParseQuantity(r.EphemeralStorage); err == nil {
+			limits[corev1.ResourceEphemeralStorage] = q
+		}
+	}
 	if len(limits) == 0 {
 		return corev1.ResourceRequirements{}
 	}

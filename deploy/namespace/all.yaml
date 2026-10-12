@@ -47,7 +47,7 @@ data:
     pools:
       - labels: [self-hosted, ubuntu-latest]
         image: ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest
-        resources: { cpu: "2", memory: 4Gi }
+        resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
         slots: 2
         timeout: 1h
 ---
@@ -67,6 +67,9 @@ spec:
       containers:
         - name: controller
           image: ghcr.io/vlee0203/gitea-k8s-runner/controller:latest
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 1, memory: 512Mi, ephemeral-storage: 1Gi }
           ports:
             - { name: http, containerPort: 8080 }
           env:

@@ -13,8 +13,9 @@ import (
 // ResourceLimits mirrors the subset of Kubernetes resource requirements a pool
 // may set for its executor pods.
 type ResourceLimits struct {
-	CPU    string `yaml:"cpu"`
-	Memory string `yaml:"memory"`
+	CPU              string `yaml:"cpu"`
+	Memory           string `yaml:"memory"`
+	EphemeralStorage string `yaml:"ephemeralStorage"`
 }
 
 // Pool is one execution-environment template: a label set, the executor image
