@@ -42,6 +42,7 @@ type Config struct {
 	TargetNamespace       string // where executor pods are created
 	WorkerName            string // base name of the registered runner
 	StateSecretName       string // Secret persisting this worker's runner identity
+	ImagePullSecret       string // imagePullSecret for private executor images ("" = none)
 	Pools                 []Pool
 }
 
@@ -64,6 +65,7 @@ func Load() (*Config, error) {
 		TargetNamespace:       env("TARGET_NAMESPACE", ""),
 		WorkerName:            env("WORKER_NAME", "gitea-k8s-runner"),
 		StateSecretName:       env("STATE_SECRET_NAME", "gitea-k8s-runner-state"),
+		ImagePullSecret:       env("IMAGE_PULL_SECRET", ""),
 	}
 	if c.GiteaURL == "" {
 		return nil, fmt.Errorf("GITEA_INSTANCE_URL is required")

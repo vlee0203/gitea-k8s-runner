@@ -31,6 +31,8 @@ type Spec struct {
 	Capability   string // bearer secret the pod presents to the facade
 	FacadeURL    string // runner --instance target
 	Resources    corev1.ResourceRequirements
+	// ImagePullSecret, when set, is used to pull the executor image.
+	ImagePullSecret string
 	// ActiveDeadlineSeconds, when > 0, bounds how long the pod may run.
 	ActiveDeadlineSeconds int64
 }
@@ -65,6 +67,7 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 		Spec: corev1.PodSpec{
 			RestartPolicy:         corev1.RestartPolicyNever,
 			ActiveDeadlineSeconds: positiveOrNil(s.ActiveDeadlineSeconds),
+			ImagePullSecrets:      pullSecrets(s.ImagePullSecret),
 			// TODO: set an explicit TTL/GC story; v1 relies on Delete after the task.
 			Containers: []corev1.Container{{
 				Name:      "runner",
@@ -116,6 +119,13 @@ func (m *Manager) Delete(ctx context.Context, assignmentID string) error {
 		return err
 	}
 	return nil
+}
+
+func pullSecrets(name string) []corev1.LocalObjectReference {
+	if name == "" {
+		return nil
+	}
+	return []corev1.LocalObjectReference{{Name: name}}
 }
 
 func positiveOrNil(n int64) *int64 {

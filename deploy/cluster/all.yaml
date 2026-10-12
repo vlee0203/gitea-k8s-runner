@@ -70,6 +70,8 @@ spec:
       labels: { app: gitea-k8s-runner }
     spec:
       serviceAccountName: gitea-k8s-runner
+      imagePullSecrets:
+        - name: ghcr-pull
       containers:
         - name: controller
           image: ghcr.io/vlee0203/gitea-k8s-runner/controller:latest
@@ -85,6 +87,7 @@ spec:
             - { name: REGISTRATION_TOKEN_FILE, value: /etc/gkr/registration-token }
             - { name: FACADE_URL, value: "http://gitea-k8s-runner:8080" }
             - { name: POOLS_FILE, value: /etc/gkr/pools.yaml }
+            - { name: IMAGE_PULL_SECRET, value: ghcr-pull }
           volumeMounts:
             - { name: registration, mountPath: /etc/gkr, readOnly: true }
             - { name: pools, mountPath: /etc/gkr/pools.yaml, subPath: pools.yaml, readOnly: true }

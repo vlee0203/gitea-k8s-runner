@@ -101,6 +101,7 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 		Capability:            capability,
 		FacadeURL:             w.cfg.FacadeURL,
 		Resources:             resources(w.pool.Resources),
+		ImagePullSecret:       w.cfg.ImagePullSecret,
 		ActiveDeadlineSeconds: timeoutSeconds(w.pool.Timeout),
 	}); err != nil {
 		log.Printf("worker %v: start executor for task %s: %v", w.pool.Labels, id, err)
