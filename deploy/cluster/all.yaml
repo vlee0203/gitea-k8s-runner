@@ -18,7 +18,7 @@ rules:
     verbs: ["create", "get", "list", "watch", "delete"]
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["create", "get", "delete"]
+    verbs: ["create", "get", "update", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -86,11 +86,11 @@ spec:
             - { name: TARGET_NAMESPACE, value: gitea-k8s-runner }
             - { name: REGISTRATION_TOKEN_FILE, value: /etc/gkr/registration-token }
             - { name: FACADE_URL, value: "http://gitea-k8s-runner:8080" }
-            - { name: POOLS_FILE, value: /etc/gkr/pools.yaml }
+            - { name: POOLS_FILE, value: /etc/pools/pools.yaml }
             - { name: IMAGE_PULL_SECRET, value: ghcr-pull }
           volumeMounts:
             - { name: registration, mountPath: /etc/gkr, readOnly: true }
-            - { name: pools, mountPath: /etc/gkr/pools.yaml, subPath: pools.yaml, readOnly: true }
+            - { name: pools, mountPath: /etc/pools, readOnly: true }
       volumes:
         - name: registration
           secret:

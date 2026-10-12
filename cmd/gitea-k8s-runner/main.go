@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -124,11 +126,20 @@ func runController(args []string) error {
 	// Clean up executors left over from a previous run before starting fresh.
 	lifecycle.New(exec, clients).Recover(ctx)
 
+	// An executor pod points its runner at this address (the facade), so the
+	// runner also treats it as the job's server URL — e.g. actions/checkout
+	// clones from here. Proxy everything that is not the runner protocol itself
+	// to the real Gitea so those requests still work.
+	giteaURL, err := url.Parse(cfg.GiteaURL)
+	if err != nil {
+		return err
+	}
 	mux := http.NewServeMux()
 	_, runnerH := fac.Handler()
 	_, pingH := fac.PingHandler()
 	mux.Handle("/api/actions/runner.v1.RunnerService/", http.StripPrefix("/api/actions", runnerH))
 	mux.Handle("/api/actions/ping.v1.PingService/", http.StripPrefix("/api/actions", pingH))
+	mux.Handle("/", httputil.NewSingleHostReverseProxy(giteaURL))
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: mux}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
