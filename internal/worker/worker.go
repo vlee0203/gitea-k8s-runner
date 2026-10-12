@@ -99,7 +99,7 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 	w.facade.Add(a)
 	defer w.facade.Remove(capability)
 
-	repo, runID, job, workflow := githubContext(t)
+	repo, runID, job, workflow := taskContext(t)
 	id := strconv.FormatInt(t.Id, 10)
 	if err := w.exec.Start(ctx, executor.Spec{
 		AssignmentID:          id,
@@ -159,13 +159,11 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 	}
 }
 
-// githubContext reads the github context Gitea attached to the task; it is used
+// taskContext reads the (flat) context Gitea attached to the task; it is used
 // only for the executor pod's name, annotations and reported runner name.
-func githubContext(t *runnerv1.Task) (repo, runID, job, workflow string) {
-	f := t.GetContext().GetFields()["github"].GetStructValue().GetFields()
-	if f == nil {
-		return "", "", "", ""
-	}
+// Gitea's context is flat — keys are top level, not nested under "github".
+func taskContext(t *runnerv1.Task) (repo, runID, job, workflow string) {
+	f := t.GetContext().GetFields()
 	return f["repository"].GetStringValue(), f["run_id"].GetStringValue(),
 		f["job"].GetStringValue(), f["workflow"].GetStringValue()
 }
