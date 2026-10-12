@@ -12,6 +12,8 @@ import (
 	"sync"
 
 	"connectrpc.com/connect"
+	pingv1 "gitea.dev/actionslib/ping/v1"
+	"gitea.dev/actionslib/ping/v1/pingv1connect"
 	runnerv1 "gitea.dev/actionslib/runner/v1"
 	"gitea.dev/actionslib/runner/v1/runnerv1connect"
 )
@@ -153,6 +155,20 @@ func (s *Server) UpdateLog(ctx context.Context, req *connect.Request[runnerv1.Up
 	return connect.NewResponse(&runnerv1.UpdateLogResponse{AckIndex: ack}), nil
 }
 
+// PingHandler returns the Ping service handler to mount alongside the
+// RunnerService; the runner pings before it registers.
+func (s *Server) PingHandler() (string, http.Handler) {
+	return pingv1connect.NewPingServiceHandler(s)
+}
+
+// Ping echoes the request.
+func (s *Server) Ping(_ context.Context, req *connect.Request[pingv1.PingRequest]) (*connect.Response[pingv1.PingResponse], error) {
+	return connect.NewResponse(&pingv1.PingResponse{Data: req.Msg.Data}), nil
+}
+
 var errUnknownCapability = errors.New("unknown capability")
 
-var _ runnerv1connect.RunnerServiceHandler = (*Server)(nil)
+var (
+	_ runnerv1connect.RunnerServiceHandler = (*Server)(nil)
+	_ pingv1connect.PingServiceHandler     = (*Server)(nil)
+)

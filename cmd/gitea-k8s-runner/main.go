@@ -125,8 +125,10 @@ func runController(args []string) error {
 	lifecycle.New(exec, clients).Recover(ctx)
 
 	mux := http.NewServeMux()
-	_, h := fac.Handler()
-	mux.Handle("/api/actions/", http.StripPrefix("/api/actions", h))
+	_, runnerH := fac.Handler()
+	_, pingH := fac.PingHandler()
+	mux.Handle("/api/actions/runner.v1.RunnerService/", http.StripPrefix("/api/actions", runnerH))
+	mux.Handle("/api/actions/ping.v1.PingService/", http.StripPrefix("/api/actions", pingH))
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: mux}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
