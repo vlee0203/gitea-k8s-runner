@@ -9,11 +9,13 @@ import (
 	"encoding/hex"
 	"log"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"sigs.k8s.io/yaml"
 
 	runnerv1 "gitea.dev/actionslib/runner/v1"
 
@@ -94,13 +96,21 @@ func (w *Worker) Run(pollCtx, jobCtx context.Context) {
 
 // run hands one claimed task to a fresh executor pod and waits for it to finish.
 func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
+	repo, runID, job, workflow := taskContext(t)
+	id := strconv.FormatInt(t.Id, 10)
+
+	if feats := unsupportedWorkflowFeatures(t.GetWorkflowPayload(), job); len(feats) > 0 {
+		why := "runner has no docker daemon; unsupported: " + strings.Join(feats, ", ")
+		log.Printf("worker %v: job %s (%s): %s", w.pool.Labels, id, job, why)
+		w.fail(ctx, t.Id, id, why)
+		return
+	}
+
 	capability := randomCapability()
 	a := facade.NewAssignment(t, capability, w.client)
 	w.facade.Add(a)
 	defer w.facade.Remove(capability)
 
-	repo, runID, job, workflow := taskContext(t)
-	id := strconv.FormatInt(t.Id, 10)
 	if err := w.exec.Start(ctx, executor.Spec{
 		AssignmentID:          id,
 		Image:                 w.pool.Image,
@@ -157,6 +167,37 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 			}
 		}
 	}
+}
+
+// unsupportedWorkflowFeatures reports workflow keys this runner cannot honour.
+// The executor pod has no Docker daemon, so `container:` fails and `services:`
+// is silently ignored (act starts no service, yet the job "succeeds" and fails
+// later with a confusing connection error). Reject those up front with a reason.
+func unsupportedWorkflowFeatures(payload []byte, jobKey string) []string {
+	if jobKey == "" {
+		return nil
+	}
+	var wf struct {
+		Jobs map[string]struct {
+			Container any `yaml:"container"`
+			Services  any `yaml:"services"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(payload, &wf); err != nil {
+		return nil
+	}
+	job, ok := wf.Jobs[jobKey]
+	if !ok {
+		return nil
+	}
+	var out []string
+	if job.Container != nil {
+		out = append(out, "container:")
+	}
+	if job.Services != nil {
+		out = append(out, "services:")
+	}
+	return out
 }
 
 // taskContext reads the (flat) context Gitea attached to the task; it is used
