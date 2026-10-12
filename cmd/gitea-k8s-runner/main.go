@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -93,6 +94,11 @@ func runController(args []string) error {
 		Client:     cs.CoordinationV1(),
 		LockConfig: resourcelock.ResourceLockConfig{Identity: identity},
 	}
+	// RunOrDie returns as soon as ctx is cancelled, but lead() may still be
+	// draining in-flight jobs. Exiting here would kill that drain, so wait for
+	// the leader callback to finish before returning.
+	var leading atomic.Bool
+	leadDone := make(chan struct{})
 	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
 		Lock:            lock,
 		ReleaseOnCancel: true,
@@ -100,10 +106,17 @@ func runController(args []string) error {
 		RenewDeadline:   20 * time.Second,
 		RetryPeriod:     5 * time.Second,
 		Callbacks: leaderelection.LeaderCallbacks{
-			OnStartedLeading: func(leaderCtx context.Context) { lead(cfg, sc, cs, leaderCtx) },
+			OnStartedLeading: func(leaderCtx context.Context) {
+				leading.Store(true)
+				defer close(leadDone)
+				lead(cfg, sc, cs, leaderCtx)
+			},
 			OnStoppedLeading: func() { log.Printf("leadership lost") },
 		},
 	})
+	if leading.Load() {
+		<-leadDone
+	}
 	return nil
 }
 
