@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"sigs.k8s.io/yaml"
 )
@@ -43,7 +44,10 @@ type Config struct {
 	WorkerName            string // base name of the registered runner
 	StateSecretName       string // Secret persisting this worker's runner identity
 	ImagePullSecret       string // imagePullSecret for private executor images ("" = none)
-	Pools                 []Pool
+	// ShutdownTimeout is how long in-flight jobs may drain before they are
+	// cancelled. Must not exceed the pod's terminationGracePeriodSeconds.
+	ShutdownTimeout time.Duration
+	Pools           []Pool
 }
 
 func env(key, def string) string {
@@ -66,6 +70,14 @@ func Load() (*Config, error) {
 		WorkerName:            env("WORKER_NAME", "gitea-k8s-runner"),
 		StateSecretName:       env("STATE_SECRET_NAME", "gitea-k8s-runner-state"),
 		ImagePullSecret:       env("IMAGE_PULL_SECRET", ""),
+		ShutdownTimeout:       30 * time.Minute,
+	}
+	if v := env("SHUTDOWN_TIMEOUT", ""); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("SHUTDOWN_TIMEOUT: %w", err)
+		}
+		c.ShutdownTimeout = d
 	}
 	if c.GiteaURL == "" {
 		return nil, fmt.Errorf("GITEA_INSTANCE_URL is required")

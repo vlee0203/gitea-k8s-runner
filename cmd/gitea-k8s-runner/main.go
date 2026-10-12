@@ -20,9 +20,12 @@ import (
 	"syscall"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/leaderelection"
+	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
 	"github.com/vlee0203/gitea-k8s-runner/internal/config"
 	"github.com/vlee0203/gitea-k8s-runner/internal/executor"
@@ -33,6 +36,12 @@ import (
 	"github.com/vlee0203/gitea-k8s-runner/internal/state"
 	"github.com/vlee0203/gitea-k8s-runner/internal/worker"
 )
+
+// leaseName is the mutual-exclusion lock. Only the holder may serve: the facade
+// keeps each claimed task in process memory and executor pods reach it through a
+// Service that load-balances across replicas, so a second live instance would
+// hand a pod to a facade that knows nothing about its task.
+const leaseName = "gitea-k8s-runner"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -75,9 +84,40 @@ func runController(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	identity, err := os.Hostname()
+	if err != nil {
+		return err
+	}
+	lock := &resourcelock.LeaseLock{
+		LeaseMeta:  metav1.ObjectMeta{Name: leaseName, Namespace: sc.ExecutorNamespace()},
+		Client:     cs.CoordinationV1(),
+		LockConfig: resourcelock.ResourceLockConfig{Identity: identity},
+	}
+	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
+		Lock:            lock,
+		ReleaseOnCancel: true,
+		LeaseDuration:   30 * time.Second,
+		RenewDeadline:   20 * time.Second,
+		RetryPeriod:     5 * time.Second,
+		Callbacks: leaderelection.LeaderCallbacks{
+			OnStartedLeading: func(leaderCtx context.Context) { lead(cfg, sc, cs, leaderCtx) },
+			OnStoppedLeading: func() { log.Printf("leadership lost") },
+		},
+	})
+	return nil
+}
+
+// lead runs the controller while this instance holds the lease. When leaderCtx
+// is cancelled (signal or lost lease) it stops claiming new work and lets
+// in-flight jobs drain before they are cancelled.
+func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx context.Context) {
+	// jobCtx outlives leaderCtx: in-flight jobs keep running during the drain.
+	jobCtx, cancelJobs := context.WithCancel(context.WithoutCancel(leaderCtx))
+	defer cancelJobs()
+
 	regToken, err := os.ReadFile(cfg.RegistrationTokenFile)
 	if err != nil {
-		return fmt.Errorf("read registration token: %w", err)
+		fatal("read registration token: %v", err)
 	}
 	token := strings.TrimSpace(string(regToken))
 
@@ -92,26 +132,25 @@ func runController(args []string) error {
 		pool := cfg.Pools[i]
 		cli := giteaclient.New(cfg.GiteaURL, httpClient)
 
-		// Reuse this worker's persisted runner identity, or register a new one.
 		key := poolKey(pool)
-		id, ok, err := store.Get(ctx, key)
+		id, ok, err := store.Get(leaderCtx, key)
 		if err != nil {
-			return err
+			fatal("read worker state: %v", err)
 		}
 		if !ok {
-			r, err := cli.Register(ctx, cfg.WorkerName+"-"+key, token, pool.Labels, false)
+			r, err := cli.Register(leaderCtx, cfg.WorkerName+"-"+key, token, pool.Labels, false)
 			if err != nil {
-				return fmt.Errorf("register worker for %v: %w", pool.Labels, err)
+				fatal("register worker for %v: %v", pool.Labels, err)
 			}
 			id = state.Identity{UUID: r.Uuid, Token: r.Token}
-			if err := store.Put(ctx, key, id); err != nil {
-				return err
+			if err := store.Put(leaderCtx, key, id); err != nil {
+				fatal("persist worker state: %v", err)
 			}
 			log.Printf("registered worker %q for %v", r.Name, pool.Labels)
 		}
 		cli.SetIdentity(id.UUID, id.Token)
-		if err := cli.Declare(ctx, pool.Labels); err != nil {
-			return fmt.Errorf("declare %v: %w", pool.Labels, err)
+		if err := cli.Declare(leaderCtx, pool.Labels); err != nil {
+			fatal("declare %v: %v", pool.Labels, err)
 		}
 		clients = append(clients, cli)
 
@@ -119,12 +158,14 @@ func runController(args []string) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			w.Run(ctx)
+			w.Run(leaderCtx, jobCtx)
 		}()
 	}
 
-	// Clean up executors left over from a previous run before starting fresh.
-	lifecycle.New(exec, clients).Recover(ctx)
+	// Executors left over from a previous run cannot be adopted (the claimed
+	// task lives only in the dead facade), so clean them up and fail their tasks
+	// for Gitea to rerun.
+	lifecycle.New(exec, clients).Recover(jobCtx)
 
 	// An executor pod points its runner at this address (the facade), so the
 	// runner also treats it as the job's server URL — e.g. actions/checkout
@@ -132,7 +173,7 @@ func runController(args []string) error {
 	// to the real Gitea so those requests still work.
 	giteaURL, err := url.Parse(cfg.GiteaURL)
 	if err != nil {
-		return err
+		fatal("parse GITEA_INSTANCE_URL: %v", err)
 	}
 	mux := http.NewServeMux()
 	_, runnerH := fac.Handler()
@@ -140,21 +181,41 @@ func runController(args []string) error {
 	mux.Handle("/api/actions/runner.v1.RunnerService/", http.StripPrefix("/api/actions", runnerH))
 	mux.Handle("/api/actions/ping.v1.PingService/", http.StripPrefix("/api/actions", pingH))
 	mux.Handle("/", httputil.NewSingleHostReverseProxy(giteaURL))
+
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: mux}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Printf("facade server: %v", err)
-			stop()
+			cancelJobs()
 		}
 	}()
-	log.Printf("controller ready: scope=%s ns=%s facade=%s pools=%d", sc.Kind(), sc.ExecutorNamespace(), cfg.ListenAddr, len(cfg.Pools))
+	log.Printf("controller leading: leader=%s scope=%s ns=%s facade=%s pools=%d",
+		os.Getenv("HOSTNAME"), sc.Kind(), sc.ExecutorNamespace(), cfg.ListenAddr, len(cfg.Pools))
 
-	<-ctx.Done()
+	<-leaderCtx.Done()
+	log.Printf("draining in-flight jobs (timeout %s)", cfg.ShutdownTimeout)
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		log.Printf("all in-flight jobs finished")
+	case <-time.After(cfg.ShutdownTimeout):
+		log.Printf("drain timed out: cancelling in-flight jobs")
+		cancelJobs()
+		<-done
+	}
+	cancelJobs()
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
-	wg.Wait()
-	return nil
+}
+
+// fatal reports a configuration or startup error and exits. A misconfigured
+// leader must crash so it does not hold the lease while doing nothing.
+func fatal(format string, args ...any) {
+	log.Printf("fatal: "+format, args...)
+	os.Exit(1)
 }
 
 // poolKey derives a stable key from a pool's labels. Each pool gets its own

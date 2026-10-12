@@ -44,8 +44,10 @@ func New(cfg *config.Config, pool config.Pool, client *giteaclient.Client, f *fa
 	return &Worker{cfg: cfg, pool: pool, client: client, facade: f, exec: exec}
 }
 
-// Run claims and runs tasks until ctx is cancelled.
-func (w *Worker) Run(ctx context.Context) {
+// Run claims and runs tasks until pollCtx is cancelled. In-flight jobs run under
+// jobCtx, which the caller keeps alive past pollCtx so they can drain before
+// being cancelled.
+func (w *Worker) Run(pollCtx, jobCtx context.Context) {
 	sem := make(chan struct{}, w.pool.Slots)
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -53,15 +55,15 @@ func (w *Worker) Run(ctx context.Context) {
 	for {
 		select {
 		case sem <- struct{}{}:
-		case <-ctx.Done():
+		case <-pollCtx.Done():
 			return
 		}
 
-		task, version, err := w.client.FetchTask(ctx, w.version)
+		task, version, err := w.client.FetchTask(pollCtx, w.version)
 		if err != nil {
 			<-sem
 			log.Printf("worker %v: fetch task: %v", w.pool.Labels, err)
-			if !sleep(ctx, errorBackoff) {
+			if !sleep(pollCtx, errorBackoff) {
 				return
 			}
 			continue
@@ -69,7 +71,7 @@ func (w *Worker) Run(ctx context.Context) {
 		if task == nil {
 			<-sem
 			w.version = version
-			if !sleep(ctx, pollInterval) {
+			if !sleep(pollCtx, pollInterval) {
 				return
 			}
 			continue
@@ -81,7 +83,7 @@ func (w *Worker) Run(ctx context.Context) {
 		go func(t *runnerv1.Task) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			w.run(ctx, t)
+			w.run(jobCtx, t)
 		}(task)
 	}
 }
@@ -120,6 +122,11 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 	select {
 	case <-a.Done():
 	case <-ctx.Done():
+		// Shutdown cut this job short. The task is already claimed, so it cannot
+		// be handed to another runner; fail it so Gitea can rerun it.
+		if _, err := w.client.UpdateTask(context.WithoutCancel(ctx), &runnerv1.TaskState{Id: t.Id, Result: runnerv1.Result_RESULT_FAILURE}, nil); err != nil {
+			log.Printf("worker %v: fail job %s cut short by shutdown: %v", w.pool.Labels, id, err)
+		}
 	}
 }
 

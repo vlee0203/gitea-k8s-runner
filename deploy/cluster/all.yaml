@@ -19,6 +19,9 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create", "get", "update", "delete"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["create", "get", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -62,6 +65,8 @@ metadata:
   name: gitea-k8s-runner
   namespace: gitea-k8s-runner
 spec:
+  strategy:
+    type: Recreate
   replicas: 1
   selector:
     matchLabels: { app: gitea-k8s-runner }
@@ -70,6 +75,7 @@ spec:
       labels: { app: gitea-k8s-runner }
     spec:
       serviceAccountName: gitea-k8s-runner
+      terminationGracePeriodSeconds: 3660
       imagePullSecrets:
         - name: ghcr-pull
       containers:
@@ -87,6 +93,7 @@ spec:
             - { name: REGISTRATION_TOKEN_FILE, value: /etc/gkr/registration-token }
             - { name: FACADE_URL, value: "http://gitea-k8s-runner:8080" }
             - { name: POOLS_FILE, value: /etc/pools/pools.yaml }
+            - { name: SHUTDOWN_TIMEOUT, value: 30m }
             - { name: IMAGE_PULL_SECRET, value: ghcr-pull }
           volumeMounts:
             - { name: registration, mountPath: /etc/gkr, readOnly: true }
