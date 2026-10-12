@@ -1,0 +1,6 @@
+*.exe
+gitea-k8s-runner
+/bin/
+__pycache__/
+.venv/
+*.log
