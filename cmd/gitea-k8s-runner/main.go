@@ -126,6 +126,13 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 	exec := executor.New(cs, sc.ExecutorNamespace())
 	httpClient := &http.Client{Timeout: 60 * time.Second}
 
+	// Prove the state Secret is writable before registering anything: a failed
+	// registration followed by a failed persist leaves a zombie runner in Gitea
+	// on every restart.
+	if err := store.EnsureWritable(leaderCtx); err != nil {
+		fatal("state secret %q is not writable: %v", cfg.StateSecretName, err)
+	}
+
 	clients := make([]*giteaclient.Client, 0, len(cfg.Pools))
 	var wg sync.WaitGroup
 	for i := range cfg.Pools {

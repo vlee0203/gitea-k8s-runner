@@ -67,6 +67,22 @@ func (s *Store) Put(ctx context.Context, key string, id Identity) error {
 		return err
 	}
 	m[key] = id
+	return s.write(ctx, m)
+}
+
+// EnsureWritable proves the state Secret can be persisted before anything is
+// registered against Gitea. Registration creates a runner record that can only
+// be removed through the Gitea API, so registering first and failing to persist
+// afterwards would leave a zombie runner behind on every restart.
+func (s *Store) EnsureWritable(ctx context.Context) error {
+	m, err := s.load(ctx)
+	if err != nil {
+		return err
+	}
+	return s.write(ctx, m)
+}
+
+func (s *Store) write(ctx context.Context, m map[string]Identity) error {
 	b, err := json.Marshal(m)
 	if err != nil {
 		return err
