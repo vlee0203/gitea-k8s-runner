@@ -99,6 +99,7 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 	w.facade.Add(a)
 	defer w.facade.Remove(capability)
 
+	repo, runID, job, workflow := githubContext(t)
 	id := strconv.FormatInt(t.Id, 10)
 	if err := w.exec.Start(ctx, executor.Spec{
 		AssignmentID:          id,
@@ -109,6 +110,10 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 		Resources:             resources(w.pool.Resources),
 		ImagePullSecret:       w.cfg.ImagePullSecret,
 		ActiveDeadlineSeconds: timeoutSeconds(w.pool.Timeout),
+		Repo:                  repo,
+		Job:                   job,
+		RunID:                 runID,
+		Workflow:              workflow,
 	}); err != nil {
 		log.Printf("worker %v: start executor for task %s: %v", w.pool.Labels, id, err)
 		// The task is already claimed by this runner; fail it so Gitea can rerun it.
@@ -152,6 +157,17 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 			}
 		}
 	}
+}
+
+// githubContext reads the github context Gitea attached to the task; it is used
+// only for the executor pod's name, annotations and reported runner name.
+func githubContext(t *runnerv1.Task) (repo, runID, job, workflow string) {
+	f := t.GetContext().GetFields()["github"].GetStructValue().GetFields()
+	if f == nil {
+		return "", "", "", ""
+	}
+	return f["repository"].GetStringValue(), f["run_id"].GetStringValue(),
+		f["job"].GetStringValue(), f["workflow"].GetStringValue()
 }
 
 // fail marks an already-claimed task as failed so Gitea can rerun it.
