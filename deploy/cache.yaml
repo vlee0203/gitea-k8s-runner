@@ -59,7 +59,7 @@ spec:
           resources:
             requests: { cpu: 50m, memory: 100Mi }
             limits: { cpu: 500m, memory: 1Gi }
-          image: ghcr.io/vlee0203/gitea-k8s-runner/runner@sha256:c83bd8f8681b4d0c2a6500848a983a2c9e454d4b926715e13b7693816b02d57e
+          image: ghcr.io/vlee0203/gitea-k8s-runner/runner:sha-d6b8141ca746a68e099796772bed340f298071d7
           command:
             - /usr/local/bin/gitea-runner
             - cache-server
