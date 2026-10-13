@@ -184,13 +184,28 @@ func (c *Config) PoolStateKey(p Pool) string {
 // built-in fetch ignores the env proxy unless asked, and the executor image's
 // Node is 24.
 func (c *Config) ProxyEnv() map[string]string {
+	inCluster := c.noProxyHosts()
 	httpProxy := env("HTTP_PROXY", os.Getenv("http_proxy"))
 	httpsProxy := env("HTTPS_PROXY", os.Getenv("https_proxy"))
+	// GKR_PLATFORM_NO_PROXY is always set: a workflow may bring its own proxy for
+	// its steps (workflow/secret env), and the docker shim forwards it to the
+	// kaniko container — merging this list in keeps in-cluster traffic direct even
+	// when the workflow's own NO_PROXY forgets those hosts.
+	noProxy := mergeNoProxy(env("NO_PROXY", os.Getenv("no_proxy")), inCluster...)
+	// NO_PROXY is injected even with no platform proxy: a workflow may bring its
+	// own proxy, and without this list that proxy would also swallow in-cluster
+	// traffic (cloning from Gitea, reporting to the facade).
+	always := map[string]string{
+		"NO_PROXY":              noProxy,
+		"no_proxy":              noProxy,
+		"GKR_PLATFORM_NO_PROXY": strings.Join(inCluster, ","),
+	}
 	if httpProxy == "" && httpsProxy == "" {
-		return nil
+		return always
 	}
 	out := map[string]string{
-		"NO_PROXY":           mergeNoProxy(env("NO_PROXY", os.Getenv("no_proxy")), c.noProxyHosts()...),
+		"NO_PROXY":           noProxy,
+		"no_proxy":           noProxy,
 		"NODE_USE_ENV_PROXY": "1",
 	}
 	out["no_proxy"] = out["NO_PROXY"]
@@ -200,6 +215,7 @@ func (c *Config) ProxyEnv() map[string]string {
 	if httpsProxy != "" {
 		out["HTTPS_PROXY"], out["https_proxy"] = httpsProxy, httpsProxy
 	}
+	out["GKR_PLATFORM_NO_PROXY"] = always["GKR_PLATFORM_NO_PROXY"]
 	return out
 }
 

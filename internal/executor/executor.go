@@ -224,6 +224,8 @@ while true; do
     # 凭据放在 kaniko 的默认位置（本版本没有 --docker-config 参数）
     mkdir -p /kaniko/.docker
     [ -f "$shared/kaniko/.docker/config.json" ] && cp "$shared/kaniko/.docker/config.json" /kaniko/.docker/config.json
+    # 本次构建的代理设置（替身从 runner 容器转交过来，含 workflow 自带的代理）
+    if [ -f "$d/env" ]; then set -a; . "$d/env"; set +a; fi
     /kaniko/executor "$@" > "$d/log" 2>&1
     echo $? > "$d/rc"
     : > "$d/done"

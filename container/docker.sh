@@ -87,6 +87,20 @@ submit() {
     printf '%s\n' "--no-push" >> "$dir/args"
   fi
   printf '%s\n' "--verbosity=info" >> "$dir/args"
+  # 把本次步骤看到的代理设置一并交给 kaniko 容器（构建走的是另一个容器，只拿到平台注入的那份；
+  # workflow / 仓库 secret 里自带代理时，不转交的话拉基础镜像与推镜像会绕开它）。
+  # NO_PROXY 采用"用户那份 + 平台那份"的合并，避免用户漏写集群内地址而把内网流量送进代理。
+  : > "$dir/env"
+  for pair in "HTTP_PROXY:${HTTP_PROXY:-}" "http_proxy:${http_proxy:-}" "HTTPS_PROXY:${HTTPS_PROXY:-}" "https_proxy:${https_proxy:-}"; do
+    k=${pair%%:*}; v=${pair#*:}
+    [ -n "$v" ] && printf '%s=%s\n' "$k" "$v" >> "$dir/env"
+  done
+  merged_no=$(printf '%s' "${NO_PROXY:-${no_proxy:-}}")
+  if [ -n "${GKR_PLATFORM_NO_PROXY:-}" ]; then
+    merged_no=$(printf '%s' "${merged_no:+$merged_no,}${GKR_PLATFORM_NO_PROXY}")
+  fi
+  [ -n "$merged_no" ] && printf 'NO_PROXY=%s\nno_proxy=%s\n' "$merged_no" "$merged_no" >> "$dir/env"
+  log "转交代理设置给 kaniko 容器：$(tr '\n' ' ' < "$dir/env")"
   : > "$dir/go"                       # 准备就绪，kaniko 容器可以开工
   log "已交给 kaniko 容器：$(tr '\n' ' ' < "$dir/args")"
 

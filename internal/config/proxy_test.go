@@ -11,8 +11,13 @@ func TestProxyEnv(t *testing.T) {
 		FacadeURL:      "http://gitea-k8s-runner:8080",
 		CacheServerURL: "http://gitea-runner-cache:8088/",
 	}
-	if got := c.ProxyEnv(); got != nil {
-		t.Fatalf("no proxy configured → want nil, got %v", got)
+	// 没有代理时：不带代理变量，但仍给出集群内 NO_PROXY 列表（替身转交 workflow 自带代理时要用）
+	bare := c.ProxyEnv()
+	if _, ok := bare["HTTP_PROXY"]; ok {
+		t.Fatalf("no proxy configured → want no HTTP_PROXY, got %v", bare)
+	}
+	if !strings.Contains(bare["GKR_PLATFORM_NO_PROXY"], ".svc.cluster.local") {
+		t.Fatalf("GKR_PLATFORM_NO_PROXY missing in-cluster entries: %v", bare)
 	}
 
 	t.Setenv("HTTPS_PROXY", "http://proxy.corp:3128")
