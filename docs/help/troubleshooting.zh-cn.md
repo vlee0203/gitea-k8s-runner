@@ -20,6 +20,7 @@ weight: 50
 | job 失败：`不支持 docker run` / `多平台构建…做不到` | 用了需要真 docker daemon 的写法 | 见[兼容矩阵](../advanced/compatibility.zh-cn.md)；镜像构建改用 `docker build/push` 或官方 docker action |
 | Gitea 的 Runners 列表里堆着**离线条目** | 平台的 worker 记录轮换/池 label 改动后会留下旧记录；**平台刻意不自动删除**（会误伤别人的 runner） | 在对应作用域的 Runners 页面手工删，或按作用域调 `DELETE …/actions/runners/{id}` |
 | `docker build` 成功但 `docker push` 报"没有可推送的镜像" | `push` 与 `build` 不在同一个 job（替身的构建参数记录在 Pod 内的临时文件里） | 把 build 与 push 放在同一个 job |
+| job 里下载/构建/`uses:` 卡住或超时（外网要走代理的环境） | 代理没配到 Pod 上，或 `NO_PROXY` 把集群内地址也送进了代理 | controller 上设 `HTTP_PROXY/HTTPS_PROXY/NO_PROXY`（平台会注入 Pod 并自动追加集群内地址）；action 也可改从 Gitea 取（`[actions] DEFAULT_ACTIONS_URL = self`） |
 | 注册失败 / worker 起不来 | 注册令牌失效（被重置）、Secret 名不对、或 state Secret 不可写 | 看 controller 日志首几行；注册令牌重置后要同步更新 Secret |
 
 ## 收集现场

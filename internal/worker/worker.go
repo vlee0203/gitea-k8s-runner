@@ -142,6 +142,7 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 		InjectRunner:          w.pool.InjectRunner,
 		KanikoImage:           kaniko,
 		RunnerImage:           w.cfg.RunnerImage,
+		ProxyEnv:              w.cfg.ProxyEnv(),
 		ActiveDeadlineSeconds: timeoutSeconds(w.pool.Timeout),
 		Repo:                  repo,
 		Job:                   job,

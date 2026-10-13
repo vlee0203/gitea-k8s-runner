@@ -66,6 +66,29 @@ pools:
 > `resources` 里的 `ephemeralStorage` **必须给足**：命名空间若有 LimitRange 默认值（常见 100Mi），
 > checkout 或构建镜像时会直接撑爆并**驱逐 Pod**（表现为 job 莫名其妙被取消）。
 
+## 出网与代理
+
+job Pod 要访问三类地址：**Gitea**（拉代码）、**controller 的 facade**、以及**外网**（`uses:` 的 action、
+构建镜像的基础镜像、包仓库）。如果外网需要代理，分三层配：
+
+| 层 | 谁配 | 怎么配 |
+| --- | --- | --- |
+| 节点拉 Pod 镜像 | 集群/节点管理员 | containerd 的代理配置（systemd 环境变量或 `config.toml`）—— 这一层不归本平台管 |
+| **executor Pod 里的网络** | 部署 controller 的人（**平台已支持**） | 在 controller 上设 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`，平台会把它们注入**每个** executor Pod（runner 与 kaniko 两个容器都注入）；`NODE_USE_ENV_PROXY=1` 也会自动加上（Node ≥ 20 的 `fetch` 默认不认环境变量里的代理，而执行环境镜像是 Node 24） |
+| action 源码从哪来 | Gitea 管理员 | Gitea 默认从 `github.com` 取 action；不想让 Pod 出网就把它指向自己：`[actions] DEFAULT_ACTIONS_URL = self`（action 从 Gitea 内网取，完全不吃代理） |
+
+```yaml
+# controller 的 env（示例见 deploy/*/all.yaml 的注释）
+- { name: HTTP_PROXY,  value: "http://proxy.example.com:3128" }
+- { name: HTTPS_PROXY, value: "http://proxy.example.com:3128" }
+- { name: NO_PROXY,    value: "10.0.0.0/8,.svc.cluster.local,.example.com" }
+```
+
+平台会**自动**把 `localhost,127.0.0.1,::1,kubernetes.default.svc,.svc,.svc.cluster.local` 以及
+`GITEA_INSTANCE_URL` / `FACADE_URL` / `CACHE_SERVER_URL` 的主机名追加进 `NO_PROXY`——把集群内流量
+送去代理是这类环境里最常见的翻车方式。（kaniko 认 `HTTP_PROXY`/`HTTPS_PROXY`：实测把代理指到死端口，
+它会报 `proxyconnect … connection refused`。）
+
 ## 部署后校验
 
 1. controller 日志应出现 `registered worker "<name>" for [<labels>]` 与

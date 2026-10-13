@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -168,6 +169,67 @@ func (c *Config) PoolStateKey(p Pool) string {
 	}
 	sum := sha256.Sum256([]byte(c.PoolTokenFile(p)))
 	return base + "-" + hex.EncodeToString(sum[:4])
+}
+
+// ProxyEnv reports the proxy environment for executor pods, or nil when no proxy
+// is set on the controller. The controller reads these from its own environment,
+// so the operator configures them once, on the Deployment.
+//
+// A job pod talks to three kinds of address: the Gitea it clones from, the
+// controller's facade, and the internet (the actions it runs, the base images it
+// builds on, the package registries it pulls from). When egress needs a proxy,
+// the in-cluster ones must bypass it — sending them through the proxy is the
+// classic way to break every job in a proxied cluster — so they are appended to
+// NO_PROXY. Node-based actions also need NODE_USE_ENV_PROXY: since Node 20 the
+// built-in fetch ignores the env proxy unless asked, and the executor image's
+// Node is 24.
+func (c *Config) ProxyEnv() map[string]string {
+	httpProxy := env("HTTP_PROXY", os.Getenv("http_proxy"))
+	httpsProxy := env("HTTPS_PROXY", os.Getenv("https_proxy"))
+	if httpProxy == "" && httpsProxy == "" {
+		return nil
+	}
+	out := map[string]string{
+		"NO_PROXY":           mergeNoProxy(env("NO_PROXY", os.Getenv("no_proxy")), c.noProxyHosts()...),
+		"NODE_USE_ENV_PROXY": "1",
+	}
+	out["no_proxy"] = out["NO_PROXY"]
+	if httpProxy != "" {
+		out["HTTP_PROXY"], out["http_proxy"] = httpProxy, httpProxy
+	}
+	if httpsProxy != "" {
+		out["HTTPS_PROXY"], out["https_proxy"] = httpsProxy, httpsProxy
+	}
+	return out
+}
+
+// noProxyHosts lists the in-cluster hosts a job pod must reach directly.
+func (c *Config) noProxyHosts() []string {
+	hosts := []string{"localhost", "127.0.0.1", "::1", "kubernetes.default.svc", ".svc", ".svc.cluster.local"}
+	for _, raw := range []string{c.GiteaURL, c.FacadeURL, c.CacheServerURL} {
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			hosts = append(hosts, u.Hostname())
+		}
+	}
+	return hosts
+}
+
+// mergeNoProxy appends the missing entries to a NO_PROXY list, preserving what
+// the operator set and keeping each entry once.
+func mergeNoProxy(base string, extra ...string) string {
+	seen := map[string]bool{}
+	var out []string
+	for _, list := range append([]string{base}, extra...) {
+		for _, e := range strings.Split(list, ",") {
+			e = strings.TrimSpace(e)
+			if e == "" || seen[e] {
+				continue
+			}
+			seen[e] = true
+			out = append(out, e)
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 // CacheConfigYAML is the runner config fragment that points an executor job at

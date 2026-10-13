@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -67,6 +68,12 @@ type Spec struct {
 	// would destroy the runner mid-job — kaniko's own README says it must run as
 	// its own image.
 	KanikoImage string
+	// ProxyEnv, when non-empty, is set on both the runner and the kaniko
+	// container: a job pod reaches in-cluster addresses (Gitea, facade, cache)
+	// and the internet (actions, base images, package registries), and in a
+	// cluster that needs a proxy for egress the in-cluster ones must bypass it
+	// (config.Config.ProxyEnv builds that NO_PROXY).
+	ProxyEnv map[string]string
 	// ActiveDeadlineSeconds, when > 0, bounds how long the pod may run.
 	ActiveDeadlineSeconds int64
 
@@ -224,6 +231,24 @@ while true; do
   sleep 1
 done`
 
+// proxyEnvVars renders the proxy environment as sorted EnvVars (sorted so a pod
+// spec is reproducible).
+func proxyEnvVars(m map[string]string) []corev1.EnvVar {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]corev1.EnvVar, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, corev1.EnvVar{Name: k, Value: m[k]})
+	}
+	return out
+}
+
 // sidecarContainers returns the optional extra containers of a pod.
 func sidecarContainers(c *corev1.Container) []corev1.Container {
 	if c == nil {
@@ -262,6 +287,7 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 		env = append(env, corev1.EnvVar{Name: "CONFIG_FILE", Value: "/etc/gkr/" + ConfigKey})
 	}
 
+	env = append(env, proxyEnvVars(s.ProxyEnv)...)
 	runner := corev1.Container{
 		Name:  runnerContainer,
 		Image: s.Image,
@@ -332,6 +358,7 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 			// （ns-admin 是 100Mi 临时存储），kaniko 解包基础镜像+打快照会立刻超限被驱逐 ——
 			// 表现为"构建跑到一半 pod 被 Evicted、job 被取消"（实测踩过）。
 			Resources:       s.Resources,
+			Env:             proxyEnvVars(s.ProxyEnv), // kaniko 拉推镜像也要走代理
 			ImagePullPolicy: corev1.PullAlways,
 			Command:         []string{"sh", "-c", kanikoSidecarScript},
 			VolumeMounts:    []corev1.VolumeMount{shared},
