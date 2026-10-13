@@ -202,7 +202,11 @@ case "$cmd" in
   run)
     case " $* " in
       *binfmt*|*qemu*|*tonistiigi/binfmt*)
-        log "跳过 docker run $*：本平台不做多平台模拟构建（binfmt/QEMU 需要特权，安全基线不允许）" ;;
+        # setup-qemu-action 会把这条命令的**输出当 JSON 解析**（取已注册的模拟器列表），
+        # 所以这里不能只打日志：给一份形状正确的结果；同时明确告警说模拟器并未真正注册
+        # （多平台构建在本集群结构上做不到：binfmt/QEMU 需要特权，安全基线不允许）。
+        log "跳过 docker run $*：本平台不做多平台模拟构建（binfmt/QEMU 需要特权，安全基线不允许）"
+        printf '{"supported":["arm","arm64","amd64"],"emulators":{"arm":{"path":"/usr/bin/qemu-arm"},"arm64":{"path":"/usr/bin/qemu-aarch64"}}}' ;;
       *)
         die "本平台没有 docker daemon，不支持 docker run（只有 binfmt/QEMU 这类注册步骤会被跳过）" ;;
     esac ;;
