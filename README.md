@@ -20,6 +20,7 @@ Gitea ──领取/回报──▶ controller ──建 Pod──▶ executor Po
 | --- | --- |
 | [安装](docs/installation/overview.zh-cn.md) | 三种作用域形态、前置条件、部署步骤与校验、升级与回滚 |
 | [安装 · 内网部署](docs/installation/air-gapped.zh-cn.md) | 不能出网的集群：镜像/action 怎么搬进去、证书与收口 |
+| [安装 · Sealos 模板](deploy/sealos/template/gitea-k8s-runner/README_zh.md) | 目标集群是 Sealos 时，一个模板装完 |
 | [用法](docs/usage/overview.zh-cn.md) | 标准 workflow 写法、池与 `runs-on` 的匹配规则、能力对照 |
 | [用法 · 构建镜像](docs/usage/image-building.zh-cn.md) | `docker login/build/push` 与官方 docker action 怎么被接住、边界与坑 |
 | [进阶 · 架构](docs/advanced/architecture.zh-cn.md) | 先领取 + facade 交接、一次性 Pod、状态恢复、单例与 drain |

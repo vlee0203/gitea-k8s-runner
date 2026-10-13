@@ -114,37 +114,45 @@ kubectl -n <gitea-ns> set env sts/<gitea> \
 
 ## 四、HTTPS 与证书（内网最容易踩）
 
-**优先用 http。** 内网 Gitea 常见形态是裸 IP + 无 TLS，直接：
+先把"谁真的会跟 Gitea 说 TLS"查清楚（核实到代码），因为它决定了要在哪儿装 CA：
 
+| 谁 | 跟谁通信 | 要不要信任 Gitea 的证书 |
+| --- | --- | --- |
+| **controller** | **Gitea（https）**：注册 runner、facade 反向代理到真实 Gitea | **要** |
+| 执行 Pod 里的 runner / `actions/checkout` | 集群内的 **facade（明文 http）** | 不要 |
+| kaniko 旁路容器 | 构建上下文是**本地目录**（`dir://`），不连 Gitea；**但**workflow 若往自签的 Gitea registry 推镜像，它就要 | 推镜像时才要 |
+| workflow 里直接访问 Gitea API 的步骤 | Gitea（https） | 要（得用带 CA 的执行环境镜像） |
+
+依据：执行 Pod 的 `GITEA_INSTANCE_URL` 被设成 **facade 地址**（`internal/executor/executor.go` 里
+`{Name: "GITEA_INSTANCE_URL", Value: s.FacadeURL}`），而 facade 是集群内的明文 Service；controller 侧
+全代码没有 `InsecureSkipVerify`，走标准证书校验。
+
+### controller（必需）
+
+建一个 CA Secret、挂进 Deployment、设 `SSL_CERT_FILE`（Go 标准库认这个变量）：
+
+```bash
+kubectl -n <ns> create secret generic gitea-ca --from-file=ca.crt=corp-ca.crt
 ```
-GITEA_INSTANCE_URL = http://10.0.0.10:3000
+
+清单里已经放好了注释块（`deploy/*/all.yaml` 搜 `gkr-ca`）：把 `SSL_CERT_FILE=/etc/gkr-ca/ca.crt`、
+`gkr-ca` 卷与卷挂载三处取消注释即可。**用 Sealos 模板则内置**：填 `ssl_cert_file` 与 `gitea_ca_secret`
+两个输入就行（见 [Sealos 模板](#七sealos-模板)）。
+
+### 执行 Pod（只在特定场景需要）
+
+正常流量不需要（全程走 facade 明文）。只有这两种情况：① workflow 往自签的 Gitea registry 推镜像
+（kaniko 容器）② workflow 步骤直接访问 Gitea API（runner 容器）。这时**把 CA 烧进对应镜像**：
+
+```dockerfile
+FROM ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest     # kaniko 则 FROM 那个 kaniko 镜像
+COPY corp-ca.crt /usr/local/share/ca-certificates/corp-ca.crt
+RUN update-ca-certificates
 ```
 
-这样执行环境里的 `git` / `node` / kaniko 都不会遇到证书问题。
-
-若必须 HTTPS + 自签或企业 CA，注意**执行 Pod 目前无法注入自定义 CA** —— 池的字段只有
-`labels/image/resources/slots/timeout`，没有额外的 env 或卷。两条可行路：
-
-1. **把 CA 烧进 runner 镜像**（一次性，推荐）：构建 runner 镜像时加两行，之后所有 Pod 都认这个 CA。
-
-   ```dockerfile
-   # container/runner.Dockerfile 里追加
-   COPY corp-root-ca.crt /usr/local/share/ca-certificates/corp-root-ca.crt
-   RUN update-ca-certificates
-   ```
-
-   内网 Gitea 的证书换了要重新构建这个镜像。
-2. 只用 http 访问 Gitea、HTTPS 留给别的服务。
-
-只给 controller 设 `SSL_CERT_FILE` 是不够的：它只解决 controller 自己与 Gitea 通信，
-executor Pod 里的 git 照样会失败。
-
-### 还有一类"要能拉到的东西"：构建的基础镜像
-
-workflow 里 `docker build` 的 `FROM` 引用的基础镜像，是**执行 Pod 自己**去拉（kaniko 直接连 registry），
-内网同样拉不到公网镜像。两种做法：把基础镜像也搬进内网仓库、Dockerfile 里 `FROM <内网registry>/…`；
-或者让 kaniko 走 registry mirror —— 后者平台还没有暴露参数（要的话在 kaniko 容器命令行上加
-`--registry-mirror`）。用内网 base 镜像的 CI 不受影响。
+再把 `runner_image` / `kaniko_image` 指到这个派生镜像。执行 Pod 目前**无法注入额外卷或环境变量**
+（池的字段只有 `labels/image/resources/slots/timeout`），所以 CA 只能进镜像；平台侧的开关注释在
+`docs/installation/overview.zh-cn.md` 有记录但尚未实现。
 
 ## 五、集群前置条件
 
@@ -188,7 +196,27 @@ workflow 里 `docker build` 的 `FROM` 引用的基础镜像，是**执行 Pod �
 | --- | --- |
 | job 秒失败，报 `git clone … /<owner>/<repo>` | 目标实例缺这个 action 仓库（第二节没搬，或没搬你要用的 ref） |
 | `ImagePullBackOff` / `ErrImagePull` | 镜像没搬进内网仓库，或清单里地址没改全，或私有仓库缺 pull secret |
-| `x509: certificate signed by unknown authority` | 第四节：Gitea 用了私 CA，而 Pod 不认 |
+| `x509: certificate signed by unknown authority` | 第四节：Gitea 用私 CA。controller 报 = 没挂 CA；执行 Pod 报 = 那个容器（runner 直连 API / kaniko 推镜像）用了没带 CA 的镜像 |
 | Pod 被驱逐，`exceeded its local ephemeral storage limit` | 命名空间 LimitRange 的默认值太小，池里没显式给 `ephemeralStorage` |
 | `cache` Deployment 一直 Pending | 没有可用 StorageClass（`cache.yaml` 是可选组件，直接跳过） |
 | workflow 里 `docker build` 卡住/找不到 kaniko | `KANIKO_IMAGE` 没换成内网地址 |
+
+## 七、Sealos 模板
+
+目标集群也是 Sealos 的话，直接用模板部署，上面这些都在里面：
+
+```
+deploy/sealos/template/gitea-k8s-runner/     # index.yaml + README.md/README_zh.md
+```
+
+必填两个输入（`gitea_url`、`registration_token`），内网再把 `runner_image` / `kaniko_image` 指向内网仓库；
+自签证书填 `gitea_ca_secret`（默认 `gitea-ca`，先用 `kubectl create secret` 把 CA 放进去）与
+`ssl_cert_file=/etc/gkr-ca/ca.crt`。
+
+模板只涉及本应用自己的命名空间（`SCOPE=namespace`：一次性执行 Pod 也建在该命名空间），因此只需要该
+命名空间的 RBAC，不需要集群级权限。要打成集群镜像：
+
+```bash
+# 见 sealos-templates 仓库的 scripts/build-cluster-image.sh
+bash scripts/build-cluster-image.sh deploy/sealos/template/gitea-k8s-runner/index.yaml <你的镜像名>:<tag>
+```

@@ -1,0 +1,278 @@
+apiVersion: app.sealos.io/v1
+kind: Template
+metadata:
+  name: gitea-k8s-runner
+spec:
+  title: 'Gitea Actions Runner (k8s)'
+  url: 'https://github.com/vlee0203/gitea-k8s-runner'
+  gitRepo: 'https://github.com/vlee0203/gitea-k8s-runner'
+  author: 'vlee0203'
+  description: '把 Gitea Actions 的 job 跑成 Kubernetes 里一次性 Pod（类 GitHub ARC）。workflow 以 GitHub Actions 标准为准：runs-on: ubuntu-latest、uses: actions/checkout@v4、docker/build-push-action@v6 原样可用，不需要改 workflow。'
+  readme: 'https://raw.githubusercontent.com/vlee0203/gitea-k8s-runner/main/deploy/sealos/template/gitea-k8s-runner/README.md'
+  icon: 'https://raw.githubusercontent.com/labring-actions/templates/kb-0.9/template/gitea/logo.png'
+  templateType: inline
+  categories:
+    - dev-ops
+    - tool
+  defaults:
+    app_name:
+      type: string
+      value: gitea-k8s-runner-${{ random(8) }}
+  inputs:
+    gitea_url:
+      description: 'Gitea 实例地址（执行 Pod 与 controller 都要能访问），如 https://gitea.corp.local'
+      type: string
+      default: ''
+      required: true
+    registration_token:
+      description: '注册令牌。想要"全站所有仓库都能用"就填站点级（管理后台 → 站点管理 → Actions → Runners），只服务某个用户/仓库就填对应作用域的令牌'
+      type: string
+      default: ''
+      required: true
+    controller_image:
+      description: 'controller 镜像（内网请填内网仓库地址）'
+      type: string
+      default: 'ghcr.io/vlee0203/gitea-k8s-runner/controller:latest'
+      required: true
+    runner_image:
+      description: '执行环境镜像（内网请填内网仓库地址；用自签证书且 workflow 要直连 Gitea API 时，也在这里换成带 CA 的派生镜像）'
+      type: string
+      default: 'ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest'
+      required: true
+    kaniko_image:
+      description: 'kaniko 镜像（workflow 里 docker build/push 时用；内网请填内网仓库地址，要往自签证书的 registry 推镜像则换成带 CA 的派生镜像）'
+      type: string
+      default: 'ghcr.io/osscontainertools/kaniko:v1.28.6-debug'
+      required: true
+    ssl_cert_file:
+      description: 'Gitea 用自签/企业 CA 时才填，值为 /etc/gkr-ca/ca.crt（配合下面的 gitea_ca_secret）；公开证书留空'
+      type: string
+      default: ''
+      required: false
+    gitea_ca_secret:
+      description: 'CA Secret 名。**别留空**（留空会让 Deployment 因 secretName 为空被 API 拒绝）。不用自签证书就保持默认值：该 Secret 不存在也不影响启动；要用就把 CA 放进这个同名的 Secret：kubectl -n <本应用命名空间> create secret generic gitea-ca --from-file=ca.crt=corp-ca.crt'
+      type: string
+      default: 'gitea-ca'
+      required: true
+    pool_cpu:
+      description: '单个 job 的 CPU 上限'
+      type: string
+      default: '2'
+      required: false
+    pool_memory:
+      description: '单个 job 的内存上限'
+      type: string
+      default: '4Gi'
+      required: false
+    pool_ephemeral_storage:
+      description: '单个 job 的临时磁盘上限。命名空间若有 LimitRange 默认值（常见 100Mi），checkout 或构建会撑爆并驱逐 Pod，别调太小'
+      type: string
+      default: '10Gi'
+      required: false
+    pool_slots:
+      description: '并发槽位（同时最多跑几个 job）'
+      type: string
+      default: '2'
+      required: false
+    pool_timeout:
+      description: '单个 job 超时，如 1h / 30m'
+      type: string
+      default: '1h'
+      required: false
+    http_proxy:
+      description: '执行 Pod 出网代理（不需要留空）'
+      type: string
+      default: ''
+      required: false
+    https_proxy:
+      description: '执行 Pod 出网代理（不需要留空）'
+      type: string
+      default: ''
+      required: false
+    no_proxy:
+      description: '不走代理的地址（平台会自动补上集群内地址与 Gitea 主机名）'
+      type: string
+      default: ''
+      required: false
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ${{ defaults.app_name }}
+  labels:
+    cloud.sealos.io/app-deploy-manager: ${{ defaults.app_name }}
+    app: ${{ defaults.app_name }}
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ${{ defaults.app_name }}
+  labels:
+    cloud.sealos.io/app-deploy-manager: ${{ defaults.app_name }}
+    app: ${{ defaults.app_name }}
+rules:
+  # controller 需要建/删一次性 executor Pod、读写自己的状态与能力 Secret，并持有选主 Lease
+  - apiGroups: ['']
+    resources: ['pods']
+    verbs: ['create', 'get', 'list', 'watch', 'delete']
+  - apiGroups: ['']
+    resources: ['secrets']
+    verbs: ['create', 'get', 'list', 'update', 'delete']
+  - apiGroups: ['coordination.k8s.io']
+    resources: ['leases']
+    verbs: ['create', 'get', 'update']
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ${{ defaults.app_name }}
+  labels:
+    cloud.sealos.io/app-deploy-manager: ${{ defaults.app_name }}
+    app: ${{ defaults.app_name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ${{ defaults.app_name }}
+subjects:
+  - kind: ServiceAccount
+    name: ${{ defaults.app_name }}
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ${{ defaults.app_name }}
+  labels:
+    cloud.sealos.io/app-deploy-manager: ${{ defaults.app_name }}
+    app: ${{ defaults.app_name }}
+type: Opaque
+stringData:
+  token: ${{ inputs.registration_token }}
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ${{ defaults.app_name }}
+  labels:
+    cloud.sealos.io/app-deploy-manager: ${{ defaults.app_name }}
+    app: ${{ defaults.app_name }}
+data:
+  # 原路径: /etc/pools/pools.yaml（Sealos 模板的键名规则：路径里的 / - . 都换成 vn-）
+  vn-etcvn-poolsvn-poolsvn-yaml: |
+    pools:
+      # labels 就是「承诺」：Gitea 要求 job 的 runs-on 里每个 label 都被声明过，所以一个池
+      # 挂一串 label 就覆盖一串 runs-on。这串对齐 GitHub 托管 runner 的别名，标准 workflow 零改动命中。
+      # 不要声明 ubuntu-22.04：镜像基底是 Ubuntu 24.04。
+      - labels: [self-hosted, linux, x64, ubuntu-latest, ubuntu-24.04]
+        image: ${{ inputs.runner_image }}
+        resources: { cpu: "${{ inputs.pool_cpu }}", memory: ${{ inputs.pool_memory }}, ephemeralStorage: ${{ inputs.pool_ephemeral_storage }} }
+        slots: ${{ inputs.pool_slots }}
+        timeout: ${{ inputs.pool_timeout }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${{ defaults.app_name }}
+  annotations:
+    originImageName: ${{ inputs.controller_image }}
+    deploy.cloud.sealos.io/minReplicas: '1'
+    deploy.cloud.sealos.io/maxReplicas: '1'
+  labels:
+    cloud.sealos.io/app-deploy-manager: ${{ defaults.app_name }}
+    app: ${{ defaults.app_name }}
+spec:
+  replicas: 1
+  revisionHistoryLimit: 1
+  strategy:
+    # 单副本 + 选主；换镜像时先等在跑的 job 跑完（SHUTDOWN_TIMEOUT），所以"发布要等一会儿"是设计行为
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ${{ defaults.app_name }}
+  template:
+    metadata:
+      labels:
+        app: ${{ defaults.app_name }}
+    spec:
+      serviceAccountName: ${{ defaults.app_name }}
+      terminationGracePeriodSeconds: 3660
+      containers:
+        - name: controller
+          image: ${{ inputs.controller_image }}
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: '1', memory: 512Mi, ephemeral-storage: 1Gi }
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: GITEA_INSTANCE_URL, value: '${{ inputs.gitea_url }}' }
+            # 执行 Pod 建在本命名空间（TARGET_NAMESPACE 用 fieldRef 取自己）
+            - { name: SCOPE, value: namespace }
+            - name: TARGET_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            - { name: REGISTRATION_TOKEN_SECRET, value: ${{ defaults.app_name }} }
+            # 执行 Pod 里的 runner 用这个地址当 Gitea 地址（facade 反向代理到真实 Gitea）
+            - { name: FACADE_URL, value: 'http://${{ defaults.app_name }}:8080' }
+            - { name: POOLS_FILE, value: /etc/pools/pools.yaml }
+            - { name: SHUTDOWN_TIMEOUT, value: 30m }
+            - { name: RUNNER_IMAGE, value: '${{ inputs.runner_image }}' }
+            - { name: KANIKO_IMAGE, value: '${{ inputs.kaniko_image }}' }
+            # Gitea 用自签/企业 CA 时：把下面这行填成 /etc/gkr-ca/ca.crt，并填 gitea_ca_secret。
+            # （只有 controller 需要信任它：执行 Pod 全程只跟集群内 facade 说 http。）
+            - { name: SSL_CERT_FILE, value: '${{ inputs.ssl_cert_file }}' }
+            - { name: HTTP_PROXY, value: '${{ inputs.http_proxy }}' }
+            - { name: HTTPS_PROXY, value: '${{ inputs.https_proxy }}' }
+            - { name: NO_PROXY, value: '${{ inputs.no_proxy }}' }
+          volumeMounts:
+            - { name: vn-etcvn-poolsvn-poolsvn-yaml, mountPath: /etc/pools/pools.yaml, subPath: ./etc/pools/pools.yaml, readOnly: true }
+            - { name: gkr-ca, mountPath: /etc/gkr-ca, readOnly: true }
+      volumes:
+        - name: vn-etcvn-poolsvn-poolsvn-yaml
+          configMap:
+            name: ${{ defaults.app_name }}
+            items:
+              - key: vn-etcvn-poolsvn-poolsvn-yaml
+                path: ./etc/pools/pools.yaml
+            defaultMode: 420
+        # 没填 gitea_ca_secret 时这个卷为空（optional），不阻塞启动；SSL_CERT_FILE 为空串时 Go 会忽略它
+        - name: gkr-ca
+          secret:
+            secretName: ${{ inputs.gitea_ca_secret }}
+            optional: true
+            items:
+              - { key: ca.crt, path: ca.crt }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${{ defaults.app_name }}
+  labels:
+    cloud.sealos.io/app-deploy-manager: ${{ defaults.app_name }}
+    app: ${{ defaults.app_name }}
+spec:
+  selector:
+    app: ${{ defaults.app_name }}
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+
+---
+# 桌面入口：点开跳转到你的 Gitea（runner 就挂在那儿）。本应用自身没有 Web 界面。
+apiVersion: app.sealos.io/v1
+kind: App
+metadata:
+  name: ${{ defaults.app_name }}
+  labels:
+    cloud.sealos.io/app-deploy-manager: ${{ defaults.app_name }}
+spec:
+  data:
+    url: ${{ inputs.gitea_url }}
+  displayType: normal
+  icon: 'https://raw.githubusercontent.com/labring-actions/templates/kb-0.9/template/gitea/logo.png'
+  name: 'Gitea Actions Runner'
+  type: link

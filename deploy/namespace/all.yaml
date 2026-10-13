@@ -115,6 +115,9 @@ spec:
             # 下面两行 —— CACHE_SERVER_SECRET_FILE 读不到文件会让 controller 直接启动失败。
             # - { name: CACHE_SERVER_URL, value: "http://gitea-runner-cache:8088/" }
             # - { name: CACHE_SERVER_SECRET_FILE, value: /etc/cache/secret }
+            # Gitea 用自签/企业 CA 时打开（另见文件末尾 gkr-ca 卷的注释）：
+            # 只有 controller 需要信任它 —— 执行 Pod 全程只跟集群内的 facade 说 http。
+            # - { name: SSL_CERT_FILE, value: /etc/gkr-ca/ca.crt }
             # executor Pod 的 imagePullSecrets（上面那个 secret 的名字）；仓库可匿名拉取就留空。
             # - { name: IMAGE_PULL_SECRET, value: registry-pull }
             # injectRunner 的池从该镜像取 gitea-runner 二进制（静态 Go，busybox 下可跑）。
@@ -131,6 +134,7 @@ spec:
           volumeMounts:
             - { name: pools, mountPath: /etc/pools, readOnly: true }
             - { name: cache-secret, mountPath: /etc/cache, readOnly: true }
+            # - { name: gkr-ca, mountPath: /etc/gkr-ca, readOnly: true }
       volumes:
         - name: pools
           configMap: { name: gitea-k8s-runner-pools }
@@ -140,6 +144,14 @@ spec:
             secretName: gitea-runner-cache
             optional: true
             items: [{ key: secret, path: secret }]
+        # Gitea 用自签/企业 CA 时打开这三个（连同上面的 SSL_CERT_FILE 与 volumeMount）：
+        #   kubectl -n <ns> create secret generic gitea-ca --from-file=ca.crt=corp-ca.crt
+        # optional: true 让这个 Secret 不存在时也不阻塞 Pod 启动。
+        # - name: gkr-ca
+        #   secret:
+        #     secretName: gitea-ca
+        #     optional: true
+        #     items: [{ key: ca.crt, path: ca.crt }]
 ---
 apiVersion: v1
 kind: Service

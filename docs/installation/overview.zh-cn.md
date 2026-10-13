@@ -48,6 +48,9 @@ kubectl -n <ns> create secret generic gitea-runner-registration --from-literal=t
 #    pools.yaml          —— 池（labels / image / resources / slots / timeout）
 kubectl apply -f deploy/namespace/all.yaml    # 或 deploy/cluster/all.yaml
 
+# 2'.（目标集群是 Sealos）不用手改清单，直接用模板：
+#    deploy/sealos/template/gitea-k8s-runner/index.yaml —— 填 gitea_url / registration_token 即可，
+#    自签证书、内网镜像地址也都在输入里。见内网部署文档的第七节。
 # 3.（可选）共享缓存服务器：跨 job 命中 actions/cache，否则每个一次性 Pod 都是冷缓存
 kubectl apply -f deploy/cache.yaml
 #    应用之后还要把 controller 里那两行缓存 env（CACHE_SERVER_URL / CACHE_SERVER_SECRET_FILE）
