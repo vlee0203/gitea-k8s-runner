@@ -106,7 +106,9 @@ spec:
             - { name: GITEA_INSTANCE_URL, value: "https://gitea.example.com" }
             - { name: SCOPE, value: cluster }
             - { name: TARGET_NAMESPACE, value: gitea-k8s-runner }
-            - { name: REGISTRATION_TOKEN_FILE, value: /etc/gkr/registration-token }
+            # 注册令牌从 Secret 经 API 读；也可改回挂文件（REGISTRATION_TOKEN_FILE + 下方注释里的 volume），
+            # 但那样令牌会落在 Pod 文件系统里，且换令牌要重启。
+            - { name: REGISTRATION_TOKEN_SECRET, value: gitea-runner-registration }
             - { name: FACADE_URL, value: "http://gitea-k8s-runner:8080" }
             - { name: POOLS_FILE, value: /etc/pools/pools.yaml }
             - { name: SHUTDOWN_TIMEOUT, value: 30m }
@@ -117,14 +119,9 @@ spec:
             # injectRunner 的池从该镜像取 gitea-runner 二进制（静态 Go，busybox 下可跑）。
             - { name: RUNNER_IMAGE, value: ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest }
           volumeMounts:
-            - { name: registration, mountPath: /etc/gkr, readOnly: true }
             - { name: pools, mountPath: /etc/pools, readOnly: true }
             - { name: cache-secret, mountPath: /etc/cache, readOnly: true }
       volumes:
-        - name: registration
-          secret:
-            secretName: gitea-runner-registration
-            items: [{ key: token, path: registration-token }]
         - name: pools
           configMap: { name: gitea-k8s-runner-pools }
         - name: cache-secret

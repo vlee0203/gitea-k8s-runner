@@ -32,7 +32,11 @@ subjects:
   - kind: ServiceAccount
     name: gitea-k8s-runner
 ---
-# 该仓的 runner registration token（Repo Settings → Actions → Runners）。
+# 注册令牌（作用域决定这个 controller 服务谁）：
+#   repo 级  POST /repos/{owner}/{repo}/actions/runners/registration-token  → 只服务该仓
+#   user 级  POST /user/actions/runners/registration-token                  → 服务该用户名下所有仓
+#   site 级  POST /admin/actions/runners/registration-token                 → 服务全站所有仓（= GitHub-hosted 等价物）
+# 令牌经 k8s Secret 由 controller 用 API 读取（不挂文件、不落盘、换令牌不用重启）。
 apiVersion: v1
 kind: Secret
 metadata:
@@ -101,7 +105,9 @@ spec:
             - { name: SCOPE, value: namespace }
             - name: TARGET_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
-            - { name: REGISTRATION_TOKEN_FILE, value: /etc/gkr/registration-token }
+            # 注册令牌从 Secret 经 API 读；也可改回挂文件（REGISTRATION_TOKEN_FILE + 下方注释里的 volume），
+            # 但那样令牌会落在 Pod 文件系统里，且换令牌要重启。
+            - { name: REGISTRATION_TOKEN_SECRET, value: gitea-runner-registration }
             - { name: FACADE_URL, value: "http://gitea-k8s-runner:8080" }
             - { name: POOLS_FILE, value: /etc/pools/pools.yaml }
             - { name: SHUTDOWN_TIMEOUT, value: 30m }
@@ -112,14 +118,9 @@ spec:
             # injectRunner 的池从该镜像取 gitea-runner 二进制（静态 Go，busybox 下可跑）。
             - { name: RUNNER_IMAGE, value: ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest }
           volumeMounts:
-            - { name: registration, mountPath: /etc/gkr, readOnly: true }
             - { name: pools, mountPath: /etc/pools, readOnly: true }
             - { name: cache-secret, mountPath: /etc/cache, readOnly: true }
       volumes:
-        - name: registration
-          secret:
-            secretName: gitea-runner-registration
-            items: [{ key: token, path: registration-token }]
         - name: pools
           configMap: { name: gitea-k8s-runner-pools }
         - name: cache-secret
