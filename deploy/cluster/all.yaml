@@ -58,6 +58,16 @@ data:
         resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
         slots: 2
         timeout: 1h
+      # 镜像构建池：pod 镜像直接用官方 kaniko（kaniko 必须"作为自己的镜像运行"），
+      # 所以 runner 从 RUNNER_IMAGE 注入。构建用 kaniko 自己的 git context：
+      #   /kaniko/executor --context=git://${{ github.server_url }}/${{ github.repository }}.git \
+      #     --git=branch=${{ github.ref_name }} --dockerfile=Dockerfile --destination=<ref>
+      - labels: [self-hosted, build]
+        image: ghcr.io/osscontainertools/kaniko:v1.28.6-debug
+        resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
+        slots: 1
+        timeout: 1h
+        injectRunner: true
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -98,6 +108,8 @@ spec:
             - { name: CACHE_SERVER_URL, value: "http://gitea-runner-cache:8088/" }
             - { name: CACHE_SERVER_SECRET_FILE, value: /etc/cache/secret }
             - { name: IMAGE_PULL_SECRET, value: ghcr-pull }
+            # injectRunner 的池从该镜像取 gitea-runner 二进制（静态 Go，busybox 下可跑）。
+            - { name: RUNNER_IMAGE, value: ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest }
           volumeMounts:
             - { name: registration, mountPath: /etc/gkr, readOnly: true }
             - { name: pools, mountPath: /etc/pools, readOnly: true }

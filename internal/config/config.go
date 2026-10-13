@@ -27,6 +27,10 @@ type Pool struct {
 	Resources ResourceLimits `yaml:"resources"`
 	Slots     int            `yaml:"slots"`
 	Timeout   string         `yaml:"timeout"`
+	// InjectRunner copies the runner binary into the pod from RunnerImage. Set
+	// it when Image is not a runner image — e.g. the official kaniko image, which
+	// must run as its own image to build, so the runner cannot be baked in.
+	InjectRunner bool `yaml:"injectRunner"`
 }
 
 type poolsFile struct {
@@ -49,6 +53,8 @@ type Config struct {
 	// every job starts with a cold cache.
 	CacheServerURL    string
 	CacheServerSecret string
+	// RunnerImage provides the gitea-runner binary for pools that inject it.
+	RunnerImage string
 	// ShutdownTimeout is how long in-flight jobs may drain before they are
 	// cancelled. Must not exceed the pod's terminationGracePeriodSeconds.
 	ShutdownTimeout time.Duration
@@ -76,6 +82,7 @@ func Load() (*Config, error) {
 		StateSecretName:       env("STATE_SECRET_NAME", "gitea-k8s-runner-state"),
 		ImagePullSecret:       env("IMAGE_PULL_SECRET", ""),
 		CacheServerURL:        env("CACHE_SERVER_URL", ""),
+		RunnerImage:           env("RUNNER_IMAGE", ""),
 		ShutdownTimeout:       30 * time.Minute,
 	}
 	if f := env("CACHE_SERVER_SECRET_FILE", ""); f != "" {
@@ -114,6 +121,9 @@ func Load() (*Config, error) {
 	for i, pool := range p.Pools {
 		if len(pool.Labels) == 0 || pool.Image == "" || pool.Slots <= 0 {
 			return nil, fmt.Errorf("pool %d: labels, image and a positive slots are required", i)
+		}
+		if pool.InjectRunner && c.RunnerImage == "" {
+			return nil, fmt.Errorf("pool %d sets injectRunner but RUNNER_IMAGE is not set", i)
 		}
 	}
 	c.Pools = p.Pools

@@ -52,6 +52,12 @@ type Spec struct {
 	// RunnerConfig, when set, is written as the runner's config.yaml so the job
 	// uses shared infrastructure (e.g. the actions cache server).
 	RunnerConfig string
+	// InjectRunner copies the runner binary from RunnerImage into the pod before
+	// it starts. Needed when Image is not a runner image — e.g. the official
+	// kaniko image, which must run as its own image to build, so the runner
+	// cannot be baked into it.
+	InjectRunner bool
+	RunnerImage  string
 	// ActiveDeadlineSeconds, when > 0, bounds how long the pod may run.
 	ActiveDeadlineSeconds int64
 
@@ -143,6 +149,30 @@ func annotationsFor(s Spec) map[string]string {
 	return a
 }
 
+// injectedRunnerVolume is where the copied runner binary and its entrypoint live.
+const injectedRunnerVolume = "runner"
+
+// injectedEntrypoint is a POSIX-sh stand-in for the runner image's run.sh: it
+// registers against the facade and runs exactly one job. It must stay POSIX
+// because images the runner is injected into (kaniko) ship busybox sh, not bash.
+const injectedEntrypoint = `#!/bin/sh
+set -e
+CFG=""
+if [ -n "$CONFIG_FILE" ]; then CFG="--config=$CONFIG_FILE"; fi
+TOKEN=$(cat /etc/gkr/` + CapabilityKey + `)
+/opt/gkr/gitea-runner register --instance "$GITEA_INSTANCE_URL" --token "$TOKEN" \
+  --name "$GITEA_RUNNER_NAME" --labels "$GITEA_RUNNER_LABELS" --ephemeral --no-interactive $CFG
+cd /tmp
+exec /opt/gkr/gitea-runner daemon --once --labels "$GITEA_RUNNER_LABELS" $CFG
+`
+
+// injectRunnerScript copies the binary out of the runner image and writes the
+// entrypoint above next to it.
+var injectRunnerScript = "cp /usr/local/bin/gitea-runner /opt/gkr/gitea-runner" +
+	" && chmod +x /opt/gkr/gitea-runner" +
+	" && cat > /opt/gkr/entrypoint.sh <<'GKR_ENTRYPOINT'\n" + injectedEntrypoint + "GKR_ENTRYPOINT\n" +
+	" && chmod +x /opt/gkr/entrypoint.sh"
+
 // Start creates the capability Secret then the executor Pod for one assignment.
 func (m *Manager) Start(ctx context.Context, s Spec) error {
 	name := PodName(s)
@@ -173,23 +203,45 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 		env = append(env, corev1.EnvVar{Name: "CONFIG_FILE", Value: "/etc/gkr/" + ConfigKey})
 	}
 
+	runner := corev1.Container{
+		Name:         "runner",
+		Image:        s.Image,
+		Resources:    s.Resources,
+		Env:          env,
+		VolumeMounts: []corev1.VolumeMount{{Name: "capability", MountPath: "/etc/gkr", ReadOnly: true}},
+	}
+	volumes := []corev1.Volume{{
+		Name:         "capability",
+		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name}},
+	}}
+	var initContainers []corev1.Container
+	if s.InjectRunner {
+		// The job image (e.g. kaniko) has no runner in it, so copy one in and
+		// start it with a POSIX-sh entrypoint that image can execute.
+		runner.Command = []string{"/opt/gkr/entrypoint.sh"}
+		runner.VolumeMounts = append(runner.VolumeMounts,
+			corev1.VolumeMount{Name: injectedRunnerVolume, MountPath: "/opt/gkr"})
+		volumes = append(volumes, corev1.Volume{
+			Name:         injectedRunnerVolume,
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		})
+		initContainers = []corev1.Container{{
+			Name:         "runner-binary",
+			Image:        s.RunnerImage,
+			Command:      []string{"sh", "-c", injectRunnerScript},
+			VolumeMounts: []corev1.VolumeMount{{Name: injectedRunnerVolume, MountPath: "/opt/gkr"}},
+		}}
+	}
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: m.namespace, Labels: labels, Annotations: annotations},
 		Spec: corev1.PodSpec{
 			RestartPolicy:         corev1.RestartPolicyNever,
 			ActiveDeadlineSeconds: positiveOrNil(s.ActiveDeadlineSeconds),
 			ImagePullSecrets:      pullSecrets(s.ImagePullSecret),
-			Containers: []corev1.Container{{
-				Name:         "runner",
-				Image:        s.Image,
-				Resources:    s.Resources,
-				Env:          env,
-				VolumeMounts: []corev1.VolumeMount{{Name: "capability", MountPath: "/etc/gkr", ReadOnly: true}},
-			}},
-			Volumes: []corev1.Volume{{
-				Name:         "capability",
-				VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name}},
-			}},
+			InitContainers:        initContainers,
+			Containers:            []corev1.Container{runner},
+			Volumes:               volumes,
 		},
 	}
 	if _, err := m.cs.CoreV1().Pods(m.namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {

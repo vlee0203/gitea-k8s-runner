@@ -121,6 +121,8 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 		Resources:             resources(w.pool.Resources),
 		ImagePullSecret:       w.cfg.ImagePullSecret,
 		RunnerConfig:          w.cfg.CacheConfigYAML(),
+		InjectRunner:          w.pool.InjectRunner,
+		RunnerImage:           w.cfg.RunnerImage,
 		ActiveDeadlineSeconds: timeoutSeconds(w.pool.Timeout),
 		Repo:                  repo,
 		Job:                   job,
