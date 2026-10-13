@@ -54,7 +54,7 @@ parse_build() {
             GKR_PLATFORM= ;;
   esac
   # 记下这次构建：kaniko 没有本地镜像库，push 时只能按同样的参数再构建一次
-  printf '%s\n%s\n%s\n%s\n%s\n' "$GKR_CTX" "$GKR_FILE" "$GKR_ARGS" "$GKR_TARGET" "$GKR_PLATFORM" > "$SPEC"
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$GKR_CTX" "$GKR_FILE" "$GKR_ARGS" "$GKR_TARGET" "$GKR_PLATFORM" "$GKR_TAGS" > "$SPEC"
 }
 
 # 用当前 GKR_* 跑一次 kaniko；GKR_DEST 非空则构建并推送，否则只构建
@@ -116,7 +116,7 @@ case "$cmd" in
   push)
     ref=${1:-}; [ -n "$ref" ] || die "push 需要镜像名：docker push <ref>"
     [ -f "$SPEC" ] || die "没有可推送的镜像：本平台没有本地镜像库，push 只能跟在同一个 job 里的 build 之后"
-    { read -r GKR_CTX <&3; read -r GKR_FILE <&3; read -r GKR_ARGS <&3; read -r GKR_TARGET <&3; read -r GKR_PLATFORM <&3; } 3< "$SPEC" || true
+    { read -r GKR_CTX <&3; read -r GKR_FILE <&3; read -r GKR_ARGS <&3; read -r GKR_TARGET <&3; read -r GKR_PLATFORM <&3; read -r GKR_TAGS <&3; } 3< "$SPEC" || true
     # kaniko 一次可推多个 destination：如果 ref 是上次 build 的某个 tag，就把那批 tag 一起推掉
     # （`docker build -t a -t b .` + `docker push a` 是常见写法，不该为此构建两遍）。
     case " ${GKR_TAGS:-} " in
