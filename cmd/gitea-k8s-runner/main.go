@@ -128,12 +128,6 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 	jobCtx, cancelJobs := context.WithCancel(context.WithoutCancel(leaderCtx))
 	defer cancelJobs()
 
-	regToken, err := os.ReadFile(cfg.RegistrationTokenFile)
-	if err != nil {
-		fatal("read registration token: %v", err)
-	}
-	token := strings.TrimSpace(string(regToken))
-
 	store := state.New(cs, sc.ExecutorNamespace(), cfg.StateSecretName)
 	fac := facade.New()
 	exec := executor.New(cs, sc.ExecutorNamespace())
@@ -152,12 +146,16 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 		pool := cfg.Pools[i]
 		cli := giteaclient.New(cfg.GiteaURL, httpClient)
 
-		key := poolKey(pool)
+		key := cfg.PoolStateKey(pool)
 		id, ok, err := store.Get(leaderCtx, key)
 		if err != nil {
 			fatal("read worker state: %v", err)
 		}
 		if !ok {
+			token, err := readToken(cfg.PoolTokenFile(pool))
+			if err != nil {
+				fatal("pool %v: %v", pool.Labels, err)
+			}
 			r, err := cli.Register(leaderCtx, cfg.WorkerName+"-"+key, token, pool.Labels, false)
 			if err != nil {
 				fatal("register worker for %v: %v", pool.Labels, err)
@@ -238,10 +236,13 @@ func fatal(format string, args ...any) {
 	os.Exit(1)
 }
 
-// poolKey derives a stable key from a pool's labels. Each pool gets its own
-// runner identity, so labels are the natural identity key.
-func poolKey(pool config.Pool) string {
-	return strings.ReplaceAll(strings.Join(pool.Labels, "-"), "/", "_")
+// readToken reads a registration token file, trimming the trailing newline.
+func readToken(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read registration token %s: %w", path, err)
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 // kubeClient builds a client from the in-cluster config, falling back to the

@@ -3,6 +3,8 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -31,6 +33,10 @@ type Pool struct {
 	// it when Image is not a runner image — e.g. the official kaniko image, which
 	// must run as its own image to build, so the runner cannot be baked in.
 	InjectRunner bool `yaml:"injectRunner"`
+	// RegistrationTokenFile overrides the controller-wide REGISTRATION_TOKEN_FILE
+	// for this pool. Registration tokens are repo-scoped, so a pool serving a
+	// different repository needs its own token to keep least privilege per repo.
+	RegistrationTokenFile string `yaml:"registrationTokenFile"`
 }
 
 type poolsFile struct {
@@ -128,6 +134,27 @@ func Load() (*Config, error) {
 	}
 	c.Pools = p.Pools
 	return c, nil
+}
+
+// PoolTokenFile returns the registration token file a pool registers with.
+func (c *Config) PoolTokenFile(p Pool) string {
+	if p.RegistrationTokenFile != "" {
+		return p.RegistrationTokenFile
+	}
+	return c.RegistrationTokenFile
+}
+
+// PoolStateKey is the key a pool's runner identity is persisted under. Pools
+// that use the controller-wide token keep the plain label key; pools with their
+// own token get a suffix derived from that token file, so two pools with the same
+// labels but different repositories keep separate identities.
+func (c *Config) PoolStateKey(p Pool) string {
+	base := strings.ReplaceAll(strings.Join(p.Labels, "-"), "/", "_")
+	if p.RegistrationTokenFile == "" {
+		return base
+	}
+	sum := sha256.Sum256([]byte(c.PoolTokenFile(p)))
+	return base + "-" + hex.EncodeToString(sum[:4])
 }
 
 // CacheConfigYAML is the runner config fragment that points an executor job at
