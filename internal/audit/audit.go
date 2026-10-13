@@ -21,42 +21,23 @@ import (
 
 // Auditor deletes runners in scope that this controller did not register.
 type Auditor struct {
-	baseURL  string // e.g. https://gitea.example.com
-	path     string // e.g. /api/v1/user/actions/runners
-	token    string // Gitea API token with permission to manage runners in that scope
-	known    func(context.Context) (map[string]bool, error)
-	interval time.Duration
-	client   *http.Client
+	baseURL string // e.g. https://gitea.example.com
+	path    string // e.g. /api/v1/user/actions/runners
+	token   string // Gitea API token with permission to manage runners in that scope
+	known   func(context.Context) (map[string]bool, error)
+	client  *http.Client
 }
 
 // New returns an Auditor. baseURL is the Gitea instance, path the runners API
 // path for the scope to police (e.g. "/api/v1/user/actions/runners"), known
 // reports the uuids this controller has registered.
-func New(baseURL, path, token string, known func(context.Context) (map[string]bool, error), interval time.Duration) *Auditor {
+func New(baseURL, path, token string, known func(context.Context) (map[string]bool, error)) *Auditor {
 	return &Auditor{
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		path:     path,
-		token:    token,
-		known:    known,
-		interval: interval,
-		client:   &http.Client{Timeout: 30 * time.Second},
-	}
-}
-
-// Run audits on every interval until ctx is cancelled.
-func (a *Auditor) Run(ctx context.Context) {
-	log.Printf("runner audit enabled: %s every %s", a.path, a.interval)
-	t := time.NewTicker(a.interval)
-	defer t.Stop()
-	for {
-		select {
-		case <-t.C:
-			if err := a.Once(ctx); err != nil {
-				log.Printf("runner audit: %v", err)
-			}
-		case <-ctx.Done():
-			return
-		}
+		baseURL: strings.TrimRight(baseURL, "/"),
+		path:    path,
+		token:   token,
+		known:   known,
+		client:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 

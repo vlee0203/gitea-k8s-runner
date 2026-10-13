@@ -228,28 +228,35 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 			}
 			return ids, nil
 		}
-		auditor = audit.New(cfg.GiteaURL, cfg.RunnerAuditPath, cfg.GiteaAPIToken, known, cfg.AuditInterval)
-		go auditor.Run(jobCtx)
+		auditor = audit.New(cfg.GiteaURL, cfg.RunnerAuditPath, cfg.GiteaAPIToken, known)
 	}
 
-	// Rotation: re-register a worker identity older than ROTATE_AFTER and delete
-	// the runner it replaces, so a leaked runner credential stops working
-	// instead of being usable indefinitely.
-	if cfg.RotateAfter > 0 {
+	// Maintenance: audit and rotation run serially in one loop. The audit decides
+	// by the ids the state holds, so it must never observe a half-finished
+	// rotation — otherwise it would delete the identity rotation just created.
+	if auditor != nil || cfg.RotateAfter > 0 {
 		go func() {
 			t := time.NewTicker(cfg.AuditInterval)
 			defer t.Stop()
 			for {
 				select {
 				case <-t.C:
-					for i := range cfg.Pools {
-						rotateIfDue(jobCtx, cfg, store, clients[i], workers[i], cfg.Pools[i], tokenFor, auditor)
+					if auditor != nil {
+						if err := auditor.Once(jobCtx); err != nil {
+							log.Printf("runner audit: %v", err)
+						}
+					}
+					if cfg.RotateAfter > 0 {
+						for i := range cfg.Pools {
+							rotateIfDue(jobCtx, cfg, store, clients[i], workers[i], cfg.Pools[i], tokenFor, auditor)
+						}
 					}
 				case <-jobCtx.Done():
 					return
 				}
 			}
 		}()
+		log.Printf("maintenance enabled: audit=%t rotation=%s every %s", auditor != nil, cfg.RotateAfter, cfg.AuditInterval)
 	}
 
 	// An executor pod points its runner at this address (the facade), so the
@@ -331,6 +338,12 @@ func rotateIfDue(ctx context.Context, cfg *config.Config, store *state.Store, cl
 		log.Printf("rotate %v: register: %v", pool.Labels, err)
 		return
 	}
+	// Record the new identity before deleting the old runner: the audit matches
+	// on this id, so it must already be known when the replacement happens.
+	if err := store.Put(ctx, key, state.Identity{UUID: r.Uuid, Token: r.Token, RunnerID: r.Id, Registered: time.Now().Unix()}); err != nil {
+		log.Printf("rotate %v: persist: %v", pool.Labels, err)
+		return
+	}
 	cli.SetIdentity(r.Uuid, r.Token)
 	if err := cli.Declare(ctx, pool.Labels); err != nil {
 		log.Printf("rotate %v: declare: %v", pool.Labels, err)
@@ -339,9 +352,6 @@ func rotateIfDue(ctx context.Context, cfg *config.Config, store *state.Store, cl
 		if err := del.DeleteRunner(ctx, id.RunnerID); err != nil {
 			log.Printf("rotate %v: delete superseded runner %d: %v", pool.Labels, id.RunnerID, err)
 		}
-	}
-	if err := store.Put(ctx, key, state.Identity{UUID: r.Uuid, Token: r.Token, RunnerID: r.Id, Registered: time.Now().Unix()}); err != nil {
-		log.Printf("rotate %v: persist: %v", pool.Labels, err)
 	}
 	log.Printf("rotated runner identity for pool %v (new runner %d supersedes %d)", pool.Labels, r.Id, id.RunnerID)
 }
