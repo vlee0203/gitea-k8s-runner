@@ -86,9 +86,25 @@ docker/podman/buildah 都要挂载），能用的只有 kaniko；而 **kaniko �
 构建容器会用该 job 所落池的 `resources`（尤其是 `ephemeralStorage`——kaniko 解包基础镜像+打快照需要
 GB 级临时空间；池里不写、命名空间有 LimitRange 默认值时，构建跑到一半就会被驱逐）。
 
+官方 docker action 也照原样可用（实测通过）：
+
+```yaml
+- uses: docker/setup-qemu-action@v3      # 跳过并告警（本平台不做多平台模拟）
+- uses: docker/setup-buildx-action@v3    # 虚拟 builder（构建仍由 kaniko 完成）
+- uses: docker/login-action@v3           # 转成 docker login
+- uses: docker/metadata-action@v5        # 纯 JS，原样可用
+- uses: docker/build-push-action@v6      # 转成 buildx build → kaniko 构建并推送
+```
+
+替身为此提供：`docker buildx`（裸调用，action 用它判断 buildx 是否可用）、`buildx inspect`（返回它
+逐行解析的表格）、`context inspect`（JSON）、`version/info --format`、`image inspect`/`images`、
+`pull`（跳过并告警）、`run`（只跳过 binfmt/QEMU 这类注册调用，其它明确报错）、
+`--metadata-file`/`--iidfile`（从 kaniko 日志取 digest 写成 action 要的元数据）。
+
 已知边界：`docker build` 之后单独 `docker push` 时，kaniko 没有本地镜像库，push 会按同样的参数
-**重新构建一次**再推（多个 tag 会一次推完）；多平台构建（`--platform=a,b`）做不到；需要真 daemon 的
-用法（`docker run`/`compose`）明确报错，不静默失败。
+**重新构建一次**再推（多个 tag 会一次推完）；**多平台构建做不到**——多平台需要 binfmt/QEMU 模拟，而
+注册模拟器需要特权，本集群安全基线不允许（平台会明确报错并说明原因，不静默忽略）；需要真 daemon 的
+用法（`docker run`/`compose`）同样明确报错。
 
 ## 镜像与 CI
 
