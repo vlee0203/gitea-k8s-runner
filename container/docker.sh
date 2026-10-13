@@ -53,6 +53,8 @@ parse_build() {
     esac
   done
   [ -n "$GKR_CTX" ] || GKR_CTX=.
+  # 构建请求是交给**另一个容器**执行的，相对路径在那里没有意义 → 一律转绝对路径
+  GKR_CTX=$(cd "$GKR_CTX" && pwd)
   [ -n "$GKR_FILE" ] || GKR_FILE="$GKR_CTX/Dockerfile"
   [ -z "$GKR_IGNORED" ] || log "忽略 kaniko 无对应物的参数：$GKR_IGNORED"
   case "$GKR_PLATFORM" in

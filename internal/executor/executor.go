@@ -214,7 +214,10 @@ while true; do
     [ -f "$d/done" ] && continue
     set --
     while IFS= read -r a; do set -- "$@" "$a"; done < "$d/args"
-    /kaniko/executor --docker-config="$shared/kaniko/.docker/config.json" "$@" > "$d/log" 2>&1
+    # 凭据放在 kaniko 的默认位置（本版本没有 --docker-config 参数）
+    mkdir -p /kaniko/.docker
+    [ -f "$shared/kaniko/.docker/config.json" ] && cp "$shared/kaniko/.docker/config.json" /kaniko/.docker/config.json
+    /kaniko/executor "$@" > "$d/log" 2>&1
     echo $? > "$d/rc"
     : > "$d/done"
   done
