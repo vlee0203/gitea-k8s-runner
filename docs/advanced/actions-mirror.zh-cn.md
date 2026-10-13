@@ -18,7 +18,10 @@ weight: 44
 | `actions` | `checkout`、`cache`、`upload-artifact`、`download-artifact`、`setup-go`、`setup-node`、`setup-python`、`setup-java`、`setup-dotnet`、`github-script` |
 | `docker` | `login-action`、`build-push-action`、`setup-qemu-action`、`setup-buildx-action`、`metadata-action` |
 
-全部 **public**（所有用户的所有仓库都能用）；除个别例外都是 **pull mirror**，Gitea 会按间隔自动同步上游。
+全部 **public**（所有用户的所有仓库都能用）；除下节列的 4 个例外都是 **pull mirror**，Gitea 会按间隔自动同步上游。
+
+这 15 个都经实测：临时分支上四个 job（go / node / python / script）全绿，覆盖 `checkout@v4`、
+`setup-go@v5`、`setup-node@v4`、`setup-python@v5`、`github-script@v7` 五个 action。
 
 ## 再加一个 action
 
@@ -35,10 +38,11 @@ weight: 44
    `git clone --no-checkout https://<实例>/actions/setup-go … exit …`）。
 4. 记进上面那张表。
 
-## 已知例外
+## 已知例外（4 个：普通仓库，不自动同步）
 
-`actions/cache` 的上游仓库里有 Gitea 侧 `git fsck` 拒绝的对象（`largePathname: contains excessively
-large pathname`），migrate 会失败 → 改用"本地裸克隆 + 只推 `refs/heads/v*`、`refs/tags/v*`"。
+`actions/cache`、`actions/setup-java`、`docker/build-push-action`、`docker/metadata-action` 四个的 migrate
+在 Gitea 侧卡住（`git fsck` 拒绝：`largePathname: contains excessively large pathname`，或整仓超时），
+→ 改用"**本地裸克隆 + 只推 `refs/heads/v*`、`refs/tags/v*`**"。
 代价：**不是 mirror、不会自动同步**，上游更新要手工重推。
 
 同类症状（迁移/推送 `unexpected disconnect`、`could not open '/var/lib/gitea/...'`）多半是仓库大或
