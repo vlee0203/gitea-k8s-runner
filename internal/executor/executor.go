@@ -58,6 +58,14 @@ type Spec struct {
 	// cannot be baked into it.
 	InjectRunner bool
 	RunnerImage  string
+	// KanikoImage, when set, makes this a *build* pod: a container runs the
+	// official kaniko image (idle, looping) and the container above shares a
+	// scratch directory with it. The `docker` shim in the runner image drops
+	// build requests there (see container/docker.sh). kaniko cannot live in the
+	// runner's container: it unpacks base images over its own filesystem, which
+	// would destroy the runner mid-job — kaniko's own README says it must run as
+	// its own image.
+	KanikoImage string
 	// ActiveDeadlineSeconds, when > 0, bounds how long the pod may run.
 	ActiveDeadlineSeconds int64
 
@@ -179,6 +187,43 @@ var injectRunnerScript = "cp /usr/local/bin/gitea-runner /opt/gkr/gitea-runner" 
 	// killed the pod before the runner ever started).
 	"chmod +x /opt/gkr/entrypoint.sh"
 
+const (
+	// runnerContainer is the container whose exit decides the job's outcome. A
+	// build pod also runs a kaniko container, which stays up until the pod is
+	// deleted, so the pod phase alone would never become Succeeded/Failed.
+	runnerContainer = "runner"
+	// sharedDir is where a build pod's runner container and kaniko container meet.
+	sharedDir = "/shared"
+)
+
+// kanikoSidecarScript is the loop the kaniko container runs. kaniko must run in
+// its own image (its README says so, and for good reason: it unpacks base images
+// over the container's filesystem), so the build is not run by the runner but
+// handed to this container through the shared directory.
+const kanikoSidecarScript = `set -u
+shared=` + sharedDir + `
+mkdir -p "$shared/req"
+while true; do
+  for d in "$shared"/req/*/; do
+    [ -f "$d/go" ] || continue
+    [ -f "$d/done" ] && continue
+    set --
+    while IFS= read -r a; do set -- "$@" "$a"; done < "$d/args"
+    /kaniko/executor --docker-config="$shared/kaniko/.docker/config.json" "$@" > "$d/log" 2>&1
+    echo $? > "$d/rc"
+    : > "$d/done"
+  done
+  sleep 1
+done`
+
+// sidecarContainers returns the optional extra containers of a pod.
+func sidecarContainers(c *corev1.Container) []corev1.Container {
+	if c == nil {
+		return nil
+	}
+	return []corev1.Container{*c}
+}
+
 // Start creates the capability Secret then the executor Pod for one assignment.
 func (m *Manager) Start(ctx context.Context, s Spec) error {
 	name := PodName(s)
@@ -210,17 +255,29 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 	}
 
 	runner := corev1.Container{
-		Name:         "runner",
+		Name:         runnerContainer,
 		Image:        s.Image,
 		Resources:    s.Resources,
 		Env:          env,
 		VolumeMounts: []corev1.VolumeMount{{Name: "capability", MountPath: "/etc/gkr", ReadOnly: true}},
+	}
+	// 构建型 job：runner 与 kaniko 容器共享一个目录，构造请求/日志/退出码都走它。
+	if s.KanikoImage != "" {
+		env = append(env,
+			corev1.EnvVar{Name: "GKR_SHARED", Value: sharedDir},
+			// HOME 也放这里：runner 的工作目录与 `actions/checkout` 的工作区都落在共享目录里，
+			// kaniko 容器才看得到构建上下文。
+			corev1.EnvVar{Name: "HOME", Value: sharedDir + "/home"},
+		)
+		runner.Env = env
+		runner.VolumeMounts = append(runner.VolumeMounts, corev1.VolumeMount{Name: "shared", MountPath: sharedDir})
 	}
 	volumes := []corev1.Volume{{
 		Name:         "capability",
 		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name}},
 	}}
 	var initContainers []corev1.Container
+	var sidecar *corev1.Container
 	if s.InjectRunner {
 		// The job image (e.g. kaniko) has no runner in it, so copy one in and
 		// start it with a POSIX-sh entrypoint that image can execute. HOME is
@@ -241,6 +298,26 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 			VolumeMounts: []corev1.VolumeMount{{Name: injectedRunnerVolume, MountPath: "/opt/gkr"}},
 		}}
 	}
+	if s.KanikoImage != "" {
+		shared := corev1.VolumeMount{Name: "shared", MountPath: sharedDir}
+		volumes = append(volumes, corev1.Volume{
+			Name:         "shared",
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		})
+		// 先把目录建好（HOME 要能被 runner 立刻写入），再让 kaniko 容器待命。
+		initContainers = append(initContainers, corev1.Container{
+			Name:         "shared-dir",
+			Image:        s.KanikoImage,
+			Command:      []string{"sh", "-c", "mkdir -p " + sharedDir + "/home " + sharedDir + "/req " + sharedDir + "/kaniko/.docker"},
+			VolumeMounts: []corev1.VolumeMount{shared},
+		})
+		sidecar = &corev1.Container{
+			Name:         "kaniko",
+			Image:        s.KanikoImage,
+			Command:      []string{"sh", "-c", kanikoSidecarScript},
+			VolumeMounts: []corev1.VolumeMount{shared},
+		}
+	}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: m.namespace, Labels: labels, Annotations: annotations},
@@ -249,7 +326,7 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 			ActiveDeadlineSeconds: positiveOrNil(s.ActiveDeadlineSeconds),
 			ImagePullSecrets:      pullSecrets(s.ImagePullSecret),
 			InitContainers:        initContainers,
-			Containers:            []corev1.Container{runner},
+			Containers:            append([]corev1.Container{runner}, sidecarContainers(sidecar)...),
 			Volumes:               volumes,
 		},
 	}
@@ -277,6 +354,22 @@ func (m *Manager) Phase(ctx context.Context, assignmentID string) (corev1.PodPha
 	pod, err := m.find(ctx, assignmentID)
 	if err != nil || pod == nil {
 		return "", err
+	}
+	// A build pod's kaniko container runs until the pod is deleted, so the pod
+	// phase would stay Running long after the job ended. Report the phase of the
+	// container that actually runs the job.
+	for i := range pod.Status.ContainerStatuses {
+		cs := pod.Status.ContainerStatuses[i]
+		if cs.Name != runnerContainer {
+			continue
+		}
+		if cs.State.Terminated != nil {
+			if cs.State.Terminated.ExitCode == 0 {
+				return corev1.PodSucceeded, nil
+			}
+			return corev1.PodFailed, nil
+		}
+		return corev1.PodRunning, nil
 	}
 	return pod.Status.Phase, nil
 }

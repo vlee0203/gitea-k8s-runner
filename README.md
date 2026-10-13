@@ -61,8 +61,31 @@ label，runner 都必须声明过。因此：
 - workflow 语法错在 Gitea 上是**静默失败**：run 被创建但零 job、零日志；排查时先本地 parse 一遍 YAML。
 - executor Pod 名 `gitea-runner-<repo>-<job>-<taskid>`，带 `gitea-k8s-runner/assignment` label；
   `kubectl get pods` 能直接看出在跑哪个仓、哪个 job。
-- 不支持：`container:`、`services:`、`uses: docker://`（无 docker daemon）。构建镜像走 kaniko 池
-  （`injectRunner: true`：Pod 主容器仍是官方 kaniko 镜像，runner 二进制由 initContainer 注入）。
+- 不支持：`container:`、`services:`、`uses: docker://`（都要真 docker daemon）。
+
+## 构建镜像（workflow 不用改写法）
+
+workflow 里照 GitHub 写就行：
+
+```yaml
+- uses: actions/checkout@v4
+- run: docker login $REGISTRY -u '${{ secrets.REG_USER }}' -p '${{ secrets.REG_PASS }}'
+- run: docker build -t $IMAGE:tag .
+- run: docker push $IMAGE:tag
+```
+
+平台是这样接的：controller 读到这个 job 要构建镜像（`docker build/push/login`、`docker/*` 官方 action、
+或直接调 kaniko）→ 该 job 的 Pod 里**多一个官方 kaniko 镜像的容器**（待命，无特权/无 daemon/无 socket）；
+runner 容器里的 `docker` 替身（`container/docker.sh`）通过共享目录把构建交给它，并把 kaniko 的日志流回 job 日志。
+
+为什么是"另一个容器"而不是装在一起：本平台没有任何 docker daemon（PSA baseline 不许特权容器，
+docker/podman/buildah 都要挂载），能用的只有 kaniko；而 **kaniko 必须作为它自己的镜像运行**
+（它的 README 明确写了，也会清空自己容器的文件系统来解包基础镜像）——挤进 runner 容器会把 runner
+的 node、工作目录、构建上下文一起删掉。
+
+已知边界：`docker build` 之后单独 `docker push` 时，kaniko 没有本地镜像库，push 会按同样的参数
+**重新构建一次**再推（多个 tag 会一次推完）；多平台构建（`--platform=a,b`）做不到；需要真 daemon 的
+用法（`docker run`/`compose`）明确报错，不静默失败。
 
 ## 镜像与 CI
 

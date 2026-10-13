@@ -1,23 +1,23 @@
 #!/bin/sh
-# docker —— 本平台的 docker CLI 替身：把标准 docker 用法翻译成 kaniko。
+# docker —— 本平台的 docker CLI 替身：把标准 docker 命令转给同一个 Pod 里的 kaniko 容器。
 #
-# 为什么需要它：本平台的 Pod 跑在 PSA baseline 的命名空间里（不许特权容器），
-# docker / podman / buildah 都要"挂载文件系统"，没有 CAP_SYS_ADMIN 就干不了；
-# 只有 kaniko 不挂载，能在这种限制下构建镜像。于是这里提供一个同名 `docker`，
-# 让 workflow 里的 `docker login` / `docker build` / `docker push` 一个字都不用改。
+# 为什么不自己构建：本平台的 Pod 跑在 PSA baseline 的命名空间里（不许特权容器），
+# docker / podman / buildah 都要"挂载文件系统"，没有 CAP_SYS_ADMIN 干不了；能用的只有 kaniko。
+# 而 kaniko 官方明确要求**作为它自己的镜像运行**（README: "kaniko is meant to be run as an
+# image … We do not recommend running the kaniko executor binary in another image"）——
+# 它会清空自己容器的根文件系统来解包基础镜像，挤在别的容器里会把别人的东西一起删掉。
 #
-# 关键细节：kaniko 每次构建前会**清空容器根文件系统**（把要构建的基础镜像解包到 /）。
-# 所以构建前把 runner 自己需要的东西备份到 /kaniko（kaniko 不清自己的目录），构建后放回去 ——
-# 否则构建完之后 node（跑 JS action 用）、本 shim 自己、构建上下文都会被删，
-# 表现为"构建成功但后续步骤 fork/exec node: no such file"。runner 的 HOME 也由镜像设为
-# /kaniko/home（见 container/build.Dockerfile），让工作目录/构建上下落在同一块不会被清的地方。
+# 所以：要构建镜像的 job，Pod 里会多一个 **官方 kaniko 镜像的容器**（无特权、无 daemon、
+# 无 socket，只是待命），本替身通过共享目录把构建请求交给它，再把它的日志流回 job 日志。
+# 共享目录与请求协议见 internal/executor（sidecar 侧）与本文件末尾（客户端侧）。
 #
 # 覆盖：login、build、buildx build、push、tag、version、info。
 # 不覆盖（需要真 daemon，明确报错而不是静默失败）：run、compose、pull、exec、save、manifest …
 set -eu
 
-KANIKO=${KANIKO_PATH:-/kaniko/executor}
-SPEC=/tmp/.gkr-last-build          # 最近一次 build 的参数，push 时复用
+SHARED=${GKR_SHARED:-/shared}          # 与 kaniko 容器共享的目录（由 controller 挂载）
+CREDS="$SHARED/kaniko/.docker/config.json"
+SPEC=/tmp/.gkr-last-build              # 最近一次 build 的参数，push 时复用
 log() { echo "[docker] $*" >&2; }
 die() { log "$*"; exit 1; }
 
@@ -56,43 +56,45 @@ parse_build() {
   [ -n "$GKR_FILE" ] || GKR_FILE="$GKR_CTX/Dockerfile"
   [ -z "$GKR_IGNORED" ] || log "忽略 kaniko 无对应物的参数：$GKR_IGNORED"
   case "$GKR_PLATFORM" in
-    ""|*,*) [ -z "$GKR_PLATFORM" ] || die "多平台构建（--platform=$GKR_PLATFORM）本平台做不到：kaniko 一次只能构建一个平台"
-            GKR_PLATFORM= ;;
+    *", "*) die "多平台构建（--platform=$GKR_PLATFORM）本平台做不到：kaniko 一次只能构建一个平台" ;;
   esac
-  # 记下这次构建：kaniko 没有本地镜像库，push 时只能按同样的参数再构建一次
   printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$GKR_CTX" "$GKR_FILE" "$GKR_ARGS" "$GKR_TARGET" "$GKR_PLATFORM" "$GKR_TAGS" > "$SPEC"
 }
 
-KEEP=/kaniko/rt
-# 备份/恢复 runner 运行期依赖（kaniko 清空文件系统时只有 /kaniko 幸存）
-save_runtime() {
-  mkdir -p "$KEEP"
-  for p in /usr/local/bin/docker /usr/local/bin/node /usr/local/bin/npx /usr/local/bin/gitea-runner /usr/local/bin/run.sh; do
-    [ -e "$p" ] && cp -a "$p" "$KEEP/" 2>/dev/null || true
-  done
-}
-restore_runtime() {
-  for p in "$KEEP"/*; do [ -e "$p" ] && cp -a "$p" /usr/local/bin/ 2>/dev/null || true; done
-}
-
-# 用当前 GKR_* 跑一次 kaniko；GKR_DEST 非空则构建并推送，否则只构建
-run_kaniko() {
-  args="--context=dir://$GKR_CTX --dockerfile=$GKR_FILE"
-  for a in $GKR_ARGS; do args="$args --build-arg $a"; done
-  [ -z "$GKR_TARGET" ]   || args="$args --target $GKR_TARGET"
-  [ -z "$GKR_PLATFORM" ] || args="$args --custom-platform $GKR_PLATFORM"
+# 把一次构建（GKR_* + GKR_DEST）交给 kaniko 容器，并把它的输出流回来
+submit() {
+  [ -d "$SHARED" ] || die "这个 job 里没有 kaniko 容器（$SHARED 不存在）：请让平台把该 job 识别为构建任务"
+  dir="$SHARED/req/$$-$(date +%s)"
+  mkdir -p "$dir"
+  : > "$dir/args"
+  printf '%s\n' "--context=dir://$GKR_CTX" "--dockerfile=$GKR_FILE" >> "$dir/args"
+  for a in $GKR_ARGS; do printf '%s\n' "--build-arg" "$a" >> "$dir/args"; done
+  [ -z "$GKR_TARGET" ]   || printf '%s\n' "--target" "$GKR_TARGET" >> "$dir/args"
+  [ -z "$GKR_PLATFORM" ] || printf '%s\n' "--custom-platform" "$GKR_PLATFORM" >> "$dir/args"
   if [ -n "${GKR_DEST:-}" ]; then
-    for d in $GKR_DEST; do args="$args --destination=$d"; done
+    for d in $GKR_DEST; do printf '%s\n' "--destination=$d" >> "$dir/args"; done
   else
-    args="$args --no-push"
+    printf '%s\n' "--no-push" >> "$dir/args"
   fi
-  log "kaniko $args"
-  save_runtime
-  # shellcheck disable=SC2086
-  "$KANIKO" --verbosity=info $args
-  rc=$?
-  restore_runtime            # 无论成败都放回去：后续步骤（post action / docker push）还要用
-  exit $rc
+  printf '%s\n' "--verbosity=info" >> "$dir/args"
+  : > "$dir/go"                       # 准备就绪，kaniko 容器可以开工
+  log "已交给 kaniko 容器：$(tr '\n' ' ' < "$dir/args")"
+
+  # 边等边把 kaniko 的输出流到 job 日志（1 秒粒度，不重复打印）
+  seen=0
+  while [ ! -f "$dir/done" ]; do
+    if [ -f "$dir/log" ]; then
+      n=$(wc -c < "$dir/log")
+      if [ "$n" -gt "$seen" ]; then tail -c +$((seen + 1)) "$dir/log"; seen=$n; fi
+    fi
+    sleep 1
+  done
+  if [ -f "$dir/log" ]; then
+    n=$(wc -c < "$dir/log"); [ "$n" -gt "$seen" ] && tail -c +$((seen + 1)) "$dir/log"
+  fi
+  rc=$(cat "$dir/rc" 2>/dev/null || echo 1)
+  rm -rf "$dir"
+  exit "$rc"
 }
 
 cmd=${1:-}; [ $# -gt 0 ] && shift || true
@@ -110,10 +112,10 @@ case "$cmd" in
       esac
     done
     [ -n "$host" ] || die "login 需要 registry 地址：docker login <host> -u <user> -p <pass>"
-    mkdir -p /kaniko/.docker
+    mkdir -p "$(dirname "$CREDS")"
     auth=$(printf '%s:%s' "$user" "$pass" | base64 | tr -d '\n')
-    printf '{"auths":{"%s":{"auth":"%s"}}}' "$host" "$auth" > /kaniko/.docker/config.json
-    log "凭据已写入 /kaniko/.docker/config.json（$host）"
+    printf '{"auths":{"%s":{"auth":"%s"}}}' "$host" "$auth" > "$CREDS"
+    log "凭据已写入 $CREDS（kaniko 容器读同一份）"
     ;;
 
   build|buildx)
@@ -129,29 +131,27 @@ case "$cmd" in
     fi
     parse_build "$@"
     if [ "$GKR_PUSH" = 1 ] && [ -n "$GKR_TAGS" ]; then
-      GKR_DEST="$GKR_TAGS" run_kaniko   # 多个 tag 一次构建、推多份
-      exit 0
+      GKR_DEST="$GKR_TAGS" submit       # 多个 tag 一次构建、推多份
     fi
-    GKR_DEST="" run_kaniko
+    GKR_DEST="" submit
     ;;
 
   push)
     ref=${1:-}; [ -n "$ref" ] || die "push 需要镜像名：docker push <ref>"
     [ -f "$SPEC" ] || die "没有可推送的镜像：本平台没有本地镜像库，push 只能跟在同一个 job 里的 build 之后"
     { read -r GKR_CTX <&3; read -r GKR_FILE <&3; read -r GKR_ARGS <&3; read -r GKR_TARGET <&3; read -r GKR_PLATFORM <&3; read -r GKR_TAGS <&3; } 3< "$SPEC" || true
-    # kaniko 一次可推多个 destination：如果 ref 是上次 build 的某个 tag，就把那批 tag 一起推掉
-    # （`docker build -t a -t b .` + `docker push a` 是常见写法，不该为此构建两遍）。
+    # 如果 ref 是上次 build 的某个 tag，就把那批 tag 一起推掉（kaniko 一次可推多个 destination）
     case " ${GKR_TAGS:-} " in
       *" $ref "*) GKR_DEST="$GKR_TAGS" ;;
       *)          GKR_DEST="$GKR_TAGS $ref" ;;
     esac
-    log "push $ref：kaniko 没有本地镜像库，按上次 build 的参数重新构建并推送（destination:$GKR_DEST）"
-    run_kaniko
+    log "push $ref：本平台没有本地镜像库，按上次 build 的参数重新构建并推送"
+    submit
     ;;
 
   tag)   log "tag 已忽略（构建时直接打目标 tag）" ;;
   version|--version) echo "Docker version 27.0.0 (gitea-k8s-runner kaniko shim)" ;;
-  info)  echo "Server: kaniko (no docker daemon in this platform; images are built with kaniko)" ;;
+  info)  echo "Server: kaniko (no docker daemon in this platform; the pod runs a kaniko container)" ;;
   "")    die "用法：docker {login|build|push|tag|version} ..." ;;
   *)     die "本平台没有 docker daemon，不支持 docker $cmd（可用：login / build / buildx build / push / tag）" ;;
 esac

@@ -116,14 +116,13 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 		return
 	}
 
-	// 要构建/推送镜像的 job 不能跑在通用池的容器里：本平台只能靠 kaniko 构建，
-	// 而 kaniko 会把基础镜像解包到自己容器的根文件系统上，必须独占一个容器。
-	// 所以按 workflow 内容把它路由到构建环境（BUILD_IMAGE）；池的其它属性
-	// （资源、槽位、labels）照旧。
-	image, inject := w.pool.Image, w.pool.InjectRunner
-	if w.cfg.BuildImage != "" && needsImageBuild(t.GetWorkflowPayload(), job) {
-		image, inject = w.cfg.BuildImage, false
-		log.Printf("worker %v: job %s (%s) builds an image → 使用构建环境", w.pool.Labels, id, job)
+	// 要构建/推送镜像的 job：Pod 里多一个官方 kaniko 镜像的容器（待命），runner 容器里的
+	// `docker` 替身把构建交给它（见 container/docker.sh、executor.Spec.KanikoImage）。
+	// kaniko 不能和 runner 挤在一个容器里 —— 它会清空自己容器的文件系统。
+	kaniko := ""
+	if w.cfg.KanikoImage != "" && needsImageBuild(t.GetWorkflowPayload(), job) {
+		kaniko = w.cfg.KanikoImage
+		log.Printf("worker %v: job %s (%s) builds an image → Pod 里加 kaniko 容器", w.pool.Labels, id, job)
 	}
 
 	capability := randomCapability()
@@ -133,14 +132,15 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 
 	if err := w.exec.Start(ctx, executor.Spec{
 		AssignmentID:          id,
-		Image:                 image,
+		Image:                 w.pool.Image,
 		Labels:                w.pool.Labels,
 		Capability:            capability,
 		FacadeURL:             w.cfg.FacadeURL,
 		Resources:             resources(w.pool.Resources),
 		ImagePullSecret:       w.cfg.ImagePullSecret,
 		RunnerConfig:          w.cfg.CacheConfigYAML(),
-		InjectRunner:          inject,
+		InjectRunner:          w.pool.InjectRunner,
+		KanikoImage:           kaniko,
 		RunnerImage:           w.cfg.RunnerImage,
 		ActiveDeadlineSeconds: timeoutSeconds(w.pool.Timeout),
 		Repo:                  repo,

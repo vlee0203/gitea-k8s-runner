@@ -61,13 +61,12 @@ type Config struct {
 	CacheServerSecret string
 	// RunnerImage provides the gitea-runner binary for pools that inject it.
 	RunnerImage string
-	// BuildImage, when set, is the image used for jobs that build or push a
-	// container image (detected from the workflow). Such a job cannot run in the
-	// general pool's container: this platform builds with kaniko, which unpacks a
-	// base image over its own container filesystem, so it needs a container built
-	// for that. The image must be self-contained (runner + kaniko + a `docker`
-	// shim); container/build.Dockerfile builds one.
-	BuildImage string
+	// KanikoImage is the official kaniko image. Jobs that build or push a
+	// container image (detected from the workflow) get it as an extra container
+	// in their pod, and the `docker` shim in the runner image hands builds to it.
+	// kaniko must run as its own image — it unpacks base images over the
+	// container's filesystem — so it cannot share the runner's container.
+	KanikoImage string
 	// RegistrationTokenSecret names a k8s Secret (key "token") holding the
 	// registration token. When set, the controller reads it through the API
 	// instead of a mounted file, so no registration token is written to the pod
@@ -101,7 +100,7 @@ func Load() (*Config, error) {
 		ImagePullSecret:         env("IMAGE_PULL_SECRET", ""),
 		CacheServerURL:          env("CACHE_SERVER_URL", ""),
 		RunnerImage:             env("RUNNER_IMAGE", ""),
-		BuildImage:              env("BUILD_IMAGE", ""),
+		KanikoImage:             env("KANIKO_IMAGE", "ghcr.io/osscontainertools/kaniko:v1.28.6"),
 		RegistrationTokenSecret: env("REGISTRATION_TOKEN_SECRET", ""),
 		ShutdownTimeout:         30 * time.Minute,
 	}
