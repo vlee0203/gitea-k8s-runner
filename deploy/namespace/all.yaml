@@ -55,7 +55,7 @@ data:
   # 对齐 GitHub 的别名，让标准 workflow 零改动命中：GitHub 托管 runner 的 ubuntu-latest 同时带
   # linux/x64/ubuntu-24.04 这些 label。**不要**声明 ubuntu-22.04：本池镜像是 Ubuntu 24.04
   # （runner-images 带 LSB_RELEASE=24.04），声明了不会报错，只会静默地按错误环境跑。
-  # linux/x64 只给通用池：否则 runs-on: [self-hosted, linux] 会落到 kaniko 池上。
+  # linux/x64 只挂通用池：否则 runs-on: [self-hosted, linux] 这类通用写法会落到专用池（槽位更少）上。
   pools.yaml: |
     pools:
       - labels: [self-hosted, linux, x64, ubuntu-latest, ubuntu-24.04]
@@ -63,16 +63,13 @@ data:
         resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
         slots: 2
         timeout: 1h
-      # 镜像构建池：pod 镜像直接用官方 kaniko（kaniko 必须"作为自己的镜像运行"），
-      # 所以 runner 从 RUNNER_IMAGE 注入。构建用 kaniko 自己的 git context：
-      #   /kaniko/executor --context=git://${{ github.server_url }}/${{ github.repository }}.git \
-      #     --git=branch=${{ github.ref_name }} --dockerfile=Dockerfile --destination=<ref>
+      # 第二个池只是"更大规格 + 自带标签"，镜像与上一个相同：workflow 里的 docker 构建
+      # 由平台自动附加的 kaniko 容器完成（见 KANIKO_IMAGE），不需要专用构建镜像。
       - labels: [self-hosted, build]
-        image: ghcr.io/osscontainertools/kaniko:v1.28.6-debug
+        image: ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest
         resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
         slots: 1
         timeout: 1h
-        injectRunner: true
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -117,6 +114,10 @@ spec:
             - { name: IMAGE_PULL_SECRET, value: ghcr-pull }
             # injectRunner 的池从该镜像取 gitea-runner 二进制（静态 Go，busybox 下可跑）。
             - { name: RUNNER_IMAGE, value: ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest }
+            # 官方 kaniko 镜像：job 里出现 docker build/push/login（或 docker/* 官方 action）时，
+            # 该 job 的 Pod 里会多加一个待命的 kaniko 容器，runner 容器里的 `docker` 替身把构建交给它
+            # （kaniko 必须作为它自己的镜像运行）。不配则不支持 workflow 内构建镜像。
+            - { name: KANIKO_IMAGE, value: ghcr.io/osscontainertools/kaniko:v1.28.6-debug }
           volumeMounts:
             - { name: pools, mountPath: /etc/pools, readOnly: true }
             - { name: cache-secret, mountPath: /etc/cache, readOnly: true }

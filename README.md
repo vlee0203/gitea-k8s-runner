@@ -1,117 +1,74 @@
 # gitea-k8s-runner
 
-把 Gitea Actions 的 job 跑成 Kubernetes 里**一次性 Pod** 的 controller（类 GitHub ARC 的形态）：
+把 **Gitea Actions** 的 job 跑成 Kubernetes 里**一次性 Pod** 的 controller（类 GitHub ARC）。
 
-1. controller 里的 worker 以自身 runner 身份**先原子领取**一个 task（Gitea 侧归属当场确定，别的 worker 抢不走）；
-2. 为这个 task 建一个一次性 executor Pod，Pod 内的 **stock `gitea-runner`** 通过 controller 的 **facade** 拿到
-   "这个已被领取的 task"并执行；
-3. 日志/状态经 facade 用领取者身份回传 Gitea，跑完删除 Pod。
+workflow 以 **GitHub Actions 标准**为准：`runs-on: ubuntu-latest`、`uses: actions/checkout@v4`、
+`docker/build-push-action@v6` 这类写法**原样可用**，不需要为本平台做任何改动。
 
-**一个 job = 一个 Pod**，环境互不污染。
+```
+Gitea ──领取/回报──▶ controller ──建 Pod──▶ executor Pod（一次性，跑完即删）
+                        │                        │
+                        └── facade ◀─────────────┘（stock gitea-runner）
+```
 
 为什么自建：Gitea OSS 没有 JIT configuration API（服务端无法"把指定 job 绑给指定 runner"），官方 runner 的
-`kubernetes://` 模式要求 k8s ≥ 1.30。机制细节、取舍与支持矩阵见 `DESIGN.md`（不入库）。
+`kubernetes://` 模式又要求 k8s ≥ 1.30。
 
-## 部署形态
+## 文档
 
-同一个二进制/镜像，**差别只在注册令牌的作用域**（令牌作用域决定这个 controller 服务谁）：
+| 章节 | 内容 |
+| --- | --- |
+| [安装](docs/installation/overview.zh-cn.md) | 三种作用域形态、前置条件、部署步骤与校验、升级与回滚 |
+| [用法](docs/usage/overview.zh-cn.md) | 标准 workflow 写法、池与 `runs-on` 的匹配规则、能力对照 |
+| [用法 · 构建镜像](docs/usage/image-building.zh-cn.md) | `docker login/build/push` 与官方 docker action 怎么被接住、边界与坑 |
+| [进阶 · 架构](docs/advanced/architecture.zh-cn.md) | 先领取 + facade 交接、一次性 Pod、状态恢复、单例与 drain |
+| [进阶 · 安全](docs/advanced/security.zh-cn.md) | 作用域隔离、平台只持注册令牌、刻意不做的事 |
+| [进阶 · 兼容矩阵](docs/advanced/compatibility.zh-cn.md) | 哪些可用、哪些是 Gitea 文档差异、哪些本平台做不到及原因 |
+| [进阶 · 开发](docs/advanced/development.zh-cn.md) | 代码结构、本地构建与测试、CI |
+| [帮助 · 排查](docs/help/troubleshooting.zh-cn.md) | 症状 → 原因 |
 
-| 形态 | 注册令牌 | 服务范围 | 清单 |
-| --- | --- | --- | --- |
-| 用户级（自助、最小 RBAC） | user 级 | 该用户名下所有仓 | `deploy/namespace/all.yaml` |
-| 站点级（平台自带 runner） | site 级 | **全站所有仓**，等价 GitHub-hosted | `deploy/cluster/all.yaml` |
-| 仓库级（最小权限） | repo 级 | 仅该仓 | 同上，换令牌 |
-
-令牌一律放 k8s Secret（key `token`），controller 经 **k8s API 读取**（`REGISTRATION_TOKEN_SECRET`），
-**不落盘、不随 Pod 分发**。
-
-## 部署
+## 快速开始
 
 ```bash
-# 1. 造令牌：repo/user 级在对应 Settings → Actions → Runners；site 级在站点管理后台
+# 1. 注册令牌放进 Secret（controller 经 k8s API 读，不落盘、不随 Pod 分发）
 kubectl -n <ns> create secret generic gitea-runner-registration --from-literal=token=<TOKEN>
 
-# 2. 按需改清单里的 pools.yaml（labels / image / resources / slots）与
-#    GITEA_INSTANCE_URL、FACADE_URL、RUNNER_IMAGE
-# 3. 应用
-kubectl apply -f deploy/namespace/all.yaml    # 或 deploy/cluster/all.yaml
+# 2. 按需改清单里的 GITEA_INSTANCE_URL / FACADE_URL / pools.yaml，然后应用
+kubectl apply -f deploy/namespace/all.yaml     # 用户级；集群级用 deploy/cluster/all.yaml
+kubectl apply -f deploy/cache.yaml             # 可选：共享缓存（跨 job 命中 actions/cache）
 ```
 
-可选的共享缓存（跨 job 命中 `actions/cache`，否则每个一次性 Pod 都是冷缓存）：`kubectl apply -f deploy/cache.yaml`。
-
-## 池（pool）与 runs-on
-
-一个池 = 一组 `labels` + 镜像 + 资源 + 并发槽数（`slots`；满载时任务留在 Gitea 队列等空位）。
-
-Gitea 的匹配规则是**子集**（`models/actions/runner.go:202 CanMatchLabels`）：job 的 `runs-on` 里**每一个**
-label，runner 都必须声明过。因此：
-
-- 一个池挂一串 label 就能覆盖一串 runs-on；拆池的理由是 **image / resources / slots 不同**，不是 label 数量。
-- **label 是承诺**：声明 `ubuntu-24.04` 就得真有 24.04 的镜像，否则 workflow 不会报错，只会静默地按错误环境跑。
-- 示例的通用池挂 GitHub 托管 runner 那套别名 `[self-hosted, linux, x64, ubuntu-latest, ubuntu-24.04]`，
-  标准 workflow 零改动命中；`linux`/`x64` 只挂通用池，否则 `runs-on: [self-hosted, linux]` 会落到 kaniko 池上。
-- `windows-*` / `macos-*` 覆盖不了（runner 本质是 Linux 进程）。
-- 没有 runner 能接的 job 会**一直 queued 且不报错**（GitHub 是排队 24h 后自动失败）——写错 `runs-on` 的表现就是"卡住"。
-
-## 运维要点
-
-- **controller 不需要任何 Gitea API token**，只持有注册令牌这一条凭据。
-- **注册令牌长期有效**：Gitea 的 REST API 不能旋转它（`shared.GetRegistrationToken` 只返回现值），
-  泄漏后没有自动收场手段——只能在后台点「重置注册令牌」人工作废。别让它落盘、别贴进聊天。
-- workflow 语法错在 Gitea 上是**静默失败**：run 被创建但零 job、零日志；排查时先本地 parse 一遍 YAML。
-- executor Pod 名 `gitea-runner-<repo>-<job>-<taskid>`，带 `gitea-k8s-runner/assignment` label；
-  `kubectl get pods` 能直接看出在跑哪个仓、哪个 job。
-- 不支持：`container:`、`services:`、`uses: docker://`（都要真 docker daemon）。
-
-## 构建镜像（workflow 不用改写法）
-
-workflow 里照 GitHub 写就行：
+跑一个最小 workflow 验收：
 
 ```yaml
-- uses: actions/checkout@v4
-- run: docker login $REGISTRY -u '${{ secrets.REG_USER }}' -p '${{ secrets.REG_PASS }}'
-- run: docker build -t $IMAGE:tag .
-- run: docker push $IMAGE:tag
+name: smoke
+on: push
+jobs:
+  t:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo ok
 ```
 
-平台是这样接的：controller 读到这个 job 要构建镜像（`docker build/push/login`、`docker/*` 官方 action、
-或直接调 kaniko）→ 该 job 的 Pod 里**多一个官方 kaniko 镜像的容器**（待命，无特权/无 daemon/无 socket）；
-runner 容器里的 `docker` 替身（`container/docker.sh`）通过共享目录把构建交给它，并把 kaniko 的日志流回 job 日志。
+## 镜像
 
-为什么是"另一个容器"而不是装在一起：本平台没有任何 docker daemon（PSA baseline 不许特权容器，
-docker/podman/buildah 都要挂载），能用的只有 kaniko；而 **kaniko 必须作为它自己的镜像运行**
-（它的 README 明确写了，也会清空自己容器的文件系统来解包基础镜像）——挤进 runner 容器会把 runner
-的 node、工作目录、构建上下文一起删掉。
-
-构建容器会用该 job 所落池的 `resources`（尤其是 `ephemeralStorage`——kaniko 解包基础镜像+打快照需要
-GB 级临时空间；池里不写、命名空间有 LimitRange 默认值时，构建跑到一半就会被驱逐）。
-
-官方 docker action 也照原样可用（实测通过）：
-
-```yaml
-- uses: docker/setup-qemu-action@v3      # 跳过并告警（本平台不做多平台模拟）
-- uses: docker/setup-buildx-action@v3    # 虚拟 builder（构建仍由 kaniko 完成）
-- uses: docker/login-action@v3           # 转成 docker login
-- uses: docker/metadata-action@v5        # 纯 JS，原样可用
-- uses: docker/build-push-action@v6      # 转成 buildx build → kaniko 构建并推送
-```
-
-替身为此提供：`docker buildx`（裸调用，action 用它判断 buildx 是否可用）、`buildx inspect`（返回它
-逐行解析的表格）、`context inspect`（JSON）、`version/info --format`、`image inspect`/`images`、
-`pull`（跳过并告警）、`run`（只跳过 binfmt/QEMU 这类注册调用，其它明确报错）、
-`--metadata-file`/`--iidfile`（从 kaniko 日志取 digest 写成 action 要的元数据）。
-
-已知边界：`docker build` 之后单独 `docker push` 时，kaniko 没有本地镜像库，push 会按同样的参数
-**重新构建一次**再推（多个 tag 会一次推完）；**多平台构建做不到**——多平台需要 binfmt/QEMU 模拟，而
-注册模拟器需要特权，本集群安全基线不允许（平台会明确报错并说明原因，不静默忽略）；需要真 daemon 的
-用法（`docker run`/`compose`）同样明确报错。
-
-## 镜像与 CI
-
-| 文件 | 内容 |
+| 镜像 | 内容 |
 | --- | --- |
-| `container/controller.Dockerfile` | 编译 controller，跑在 distroless 上 |
-| `container/runner.Dockerfile` | 通用执行环境（工具链 + stock `gitea-runner`） |
+| `ghcr.io/vlee0203/gitea-k8s-runner/controller:latest` | controller（`container/controller.Dockerfile`，distroless） |
+| `ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest` | 执行环境（工具链 + stock gitea-runner + `docker` 替身） |
 
-`.github/workflows/build.yaml`（push 到 main / 手动触发）推
-`ghcr.io/vlee0203/gitea-k8s-runner/{controller:latest,runner:ubuntu-latest}`。
+## 能力速查
+
+- ✅ `checkout` / `run` / `if` / `needs`+outputs / `matrix` / artifacts / cache / secrets / vars /
+  `timeout-minutes` / `continue-on-error` / `concurrency` / 可复用 workflow / `workflow_dispatch`
+- ✅ 在 workflow 里构建并推送镜像：`docker login|build|push` 与官方 docker action（内部用 kaniko）
+- ❌ 需要真 docker daemon 的写法：`container:` / `services:` / `uses: docker://` / `docker run`
+- ❌ 多平台构建（需 binfmt/QEMU，本集群安全基线不允许特权）、`windows-*` / `macos-*`
+
+细节与原因见[兼容矩阵](docs/advanced/compatibility.zh-cn.md)。
+
+## 状态
+
+单副本（Lease 选主）+ 优雅 drain；已在 Gitea 1.27.3 / 28.1.0 与 k8s 1.28 上端到端实测，
+包括用本平台构建本仓库自己的两个镜像（自举）。
