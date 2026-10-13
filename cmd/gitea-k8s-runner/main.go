@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -210,18 +211,22 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 		// Identify our own runners by the name we register them under plus, if
 		// present, their persisted uuid.
 		known := func(ctx context.Context) (map[string]bool, error) {
-			names := make(map[string]bool)
+			ids := make(map[string]bool, len(cfg.Pools))
 			for i := range cfg.Pools {
-				names[cfg.WorkerName+"-"+cfg.PoolStateKey(cfg.Pools[i])] = true
+				id, ok, err := store.Get(ctx, cfg.PoolStateKey(cfg.Pools[i]))
+				if err != nil {
+					return nil, err
+				}
+				if ok && id.RunnerID != 0 {
+					ids[strconv.FormatInt(id.RunnerID, 10)] = true
+				}
 			}
-			uuids, err := store.UUIDs(ctx)
-			if err != nil {
-				return nil, err
+			// Fail safe: without an id for every pool we cannot tell our runners
+			// apart, and a wrong answer would delete our own runners.
+			if len(ids) != len(cfg.Pools) {
+				return nil, fmt.Errorf("only %d of %d pools have a recorded runner id; refusing to audit", len(ids), len(cfg.Pools))
 			}
-			for u := range uuids {
-				names[u] = true
-			}
-			return names, nil
+			return ids, nil
 		}
 		auditor = audit.New(cfg.GiteaURL, cfg.RunnerAuditPath, cfg.GiteaAPIToken, known, cfg.AuditInterval)
 		go auditor.Run(jobCtx)

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -82,10 +83,10 @@ func (a *Auditor) Once(ctx context.Context) error {
 	mine, foreign := 0, 0
 	for i := range list.Runners {
 		r := list.Runners[i]
-		// The runner list API does not expose the uuid, so identify our own
-		// runners by name — that name is deterministic (WorkerName + pool key).
-		// Both are checked so this keeps working if the API starts returning uuids.
-		if known[r.UUID] || known[r.Name] {
+		// Identify our own runners by id: Gitea assigns it, the runner list API
+		// exposes it, and it is unique — matching by name would spare a stale
+		// record left behind by an earlier registration under the same name.
+		if known[strconv.FormatInt(r.ID, 10)] {
 			mine++
 			continue
 		}
