@@ -38,6 +38,17 @@ weight: 44
    `git clone --no-checkout https://<实例>/actions/setup-go … exit …`）。
 4. 记进上面那张表。
 
+仓库里的 `scripts/mirror-actions.sh` 把上面这套流程做成了命令，**换实例（尤其内网）时用它是正路**：
+
+```bash
+./scripts/mirror-actions.sh export --out actions-bundle.tar                    # 能出网的机器上
+./scripts/mirror-actions.sh import --gitea http://10.0.0.10:3000 \
+  --user admin --token <管理员PAT> --bundle actions-bundle.tar                  # 目标 Gitea
+```
+
+幂等（已有 tags 就跳过，`--repush` 强制重推）；只加一个用 `--only owner/repo`。
+内网整体流程见[内网部署](../installation/air-gapped.zh-cn.md)。
+
 ## 已知例外（4 个：普通仓库，不自动同步）
 
 `actions/cache`、`actions/setup-java`、`docker/build-push-action`、`docker/metadata-action` 四个的 migrate

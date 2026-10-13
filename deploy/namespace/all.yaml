@@ -87,8 +87,11 @@ spec:
     spec:
       serviceAccountName: gitea-k8s-runner
       terminationGracePeriodSeconds: 3660
-      imagePullSecrets:
-        - name: ghcr-pull
+      # 私有镜像仓库需要凭据时才启用（名字自取，要和下面容器里的 IMAGE_PULL_SECRET 一致）：
+      #   kubectl -n <ns> create secret docker-registry <name> \
+      #     --docker-server=<registry> --docker-username=<user> --docker-password=<pass>
+      # imagePullSecrets:
+      #   - name: registry-pull
       containers:
         - name: controller
           image: ghcr.io/vlee0203/gitea-k8s-runner/controller:latest
@@ -108,10 +111,12 @@ spec:
             - { name: FACADE_URL, value: "http://gitea-k8s-runner:8080" }
             - { name: POOLS_FILE, value: /etc/pools/pools.yaml }
             - { name: SHUTDOWN_TIMEOUT, value: 30m }
-            # 可选：指向 deploy/cache.yaml 里的共享缓存服务器（跨 job 命中缓存）。
-            - { name: CACHE_SERVER_URL, value: "http://gitea-runner-cache:8088/" }
-            - { name: CACHE_SERVER_SECRET_FILE, value: /etc/cache/secret }
-            - { name: IMAGE_PULL_SECRET, value: ghcr-pull }
+            # 共享缓存（deploy/cache.yaml）**才**会创建 Secret gitea-runner-cache；没应用它就别打开
+            # 下面两行 —— CACHE_SERVER_SECRET_FILE 读不到文件会让 controller 直接启动失败。
+            # - { name: CACHE_SERVER_URL, value: "http://gitea-runner-cache:8088/" }
+            # - { name: CACHE_SERVER_SECRET_FILE, value: /etc/cache/secret }
+            # executor Pod 的 imagePullSecrets（上面那个 secret 的名字）；仓库可匿名拉取就留空。
+            # - { name: IMAGE_PULL_SECRET, value: registry-pull }
             # injectRunner 的池从该镜像取 gitea-runner 二进制（静态 Go，busybox 下可跑）。
             - { name: RUNNER_IMAGE, value: ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest }
             # 出网需要代理时：在 controller 上设这三个（平台会自动注入每个 executor Pod，
@@ -129,9 +134,11 @@ spec:
       volumes:
         - name: pools
           configMap: { name: gitea-k8s-runner-pools }
+        # cache-secret 的 Secret 由 deploy/cache.yaml 创建；optional 让它缺席时也不阻塞 Pod 启动
         - name: cache-secret
           secret:
             secretName: gitea-runner-cache
+            optional: true
             items: [{ key: secret, path: secret }]
 ---
 apiVersion: v1

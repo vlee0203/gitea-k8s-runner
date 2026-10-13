@@ -12,10 +12,10 @@ weight: 20
 
 | 项 | 要求 |
 | --- | --- |
-| Kubernetes | 1.20+；命名空间 PSA `baseline` 即可（**不需要** privileged、不需要挂 docker socket、不需要 CRD） |
+| Kubernetes | **实测 1.28**（清单只用 `v1` / `coordination.k8s.io/v1` 这类稳定 API，更低版本未实测）；命名空间 PSA `baseline` 即可（**不需要** privileged、不需要挂 docker socket、不需要 CRD） |
 | Gitea | 带 Actions 的版本（本仓库实测 1.27.3 / 28.1.0） |
 | 权限 | 用户级形态：目标 ns 的 Role 即可；集群级形态：ClusterRole |
-| 出口网络 | Pod 需要能访问 Gitea 与镜像仓库；构建镜像时还需能拉构建所依赖的基础镜像（以及 workflow 里 `uses:` 的 action 源） |
+| 出口网络 | Pod 需要能访问 Gitea 与镜像仓库；构建镜像时还需能拉构建所依赖的基础镜像（以及 workflow 里 `uses:` 的 action 源）。**完全不能出网就照[内网部署](air-gapped.zh-cn.md)先把镜像与 action 搬进去** |
 
 ## 三种作用域形态
 
@@ -50,7 +50,13 @@ kubectl apply -f deploy/namespace/all.yaml    # 或 deploy/cluster/all.yaml
 
 # 3.（可选）共享缓存服务器：跨 job 命中 actions/cache，否则每个一次性 Pod 都是冷缓存
 kubectl apply -f deploy/cache.yaml
+#    应用之后还要把 controller 里那两行缓存 env（CACHE_SERVER_URL / CACHE_SERVER_SECRET_FILE）
+#    取消注释再 apply 一次 —— 默认是注释掉的：那个 Secret 只有 cache.yaml 会创建，
+#    没应用它却设了 SECRET_FILE，controller 会因读不到文件**直接启动失败**。
 ```
+
+> **集群级清单里写死了 `namespace: gitea-k8s-runner`**（ServiceAccount/Role/Deployment 等处）。
+> 部署到别的命名空间时记得一并替换，否则资源和 Pod 会落到 `gitea-k8s-runner` 这个 ns 里。
 
 `pools.yaml` 示例（labels 的含义与匹配规则见[用法](../usage/overview.zh-cn.md)）：
 

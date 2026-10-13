@@ -47,8 +47,11 @@ spec:
     metadata:
       labels: { app: gitea-runner-cache }
     spec:
-      imagePullSecrets:
-        - name: ghcr-pull
+      # 私有镜像仓库需要凭据时才启用（名字自取，要和下面容器里的 IMAGE_PULL_SECRET 一致）：
+      #   kubectl -n <ns> create secret docker-registry <name> \
+      #     --docker-server=<registry> --docker-username=<user> --docker-password=<pass>
+      # imagePullSecrets:
+      #   - name: registry-pull
       containers:
         - name: cache
           image: ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest
