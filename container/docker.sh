@@ -24,7 +24,7 @@ die() { log "$*"; exit 1; }
 # 解析 build 的参数（$@ = build 之后的所有参数），结果放进 GKR_* 变量
 parse_build() {
   GKR_TAGS=""; GKR_FILE=""; GKR_CTX=""; GKR_ARGS=""; GKR_TARGET=""; GKR_PLATFORM=""
-  GKR_PUSH=0; GKR_IGNORED=""
+  GKR_PUSH=0; GKR_IGNORED=""; GKR_IID=""; GKR_META=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -t|--tag)     GKR_TAGS="$GKR_TAGS $2"; shift 2 ;;
@@ -38,11 +38,15 @@ parse_build() {
       --build-arg=*)   GKR_ARGS="$GKR_ARGS ${1#*=}"; shift ;;
       --target=*)      GKR_TARGET=${1#*=}; shift ;;
       --platform=*)    GKR_PLATFORM=${1#*=}; shift ;;
-      --iidfile=*|--metadata-file=*|--cache-from=*|--cache-to=*|--secret=*|--ssh=*|--output=*|--builder=*|--network=*|--shm-size=*|--label=*|--progress=*|--provenance=*|--sbom=*|--attest=*)
+      --iidfile=*)      GKR_IID=${1#*=}; shift ;;
+      --metadata-file=*) GKR_META=${1#*=}; shift ;;
+      --cache-from=*|--cache-to=*|--secret=*|--ssh=*|--output=*|--builder=*|--network=*|--shm-size=*|--label=*|--progress=*|--provenance=*|--sbom=*|--attest=*)
                        GKR_IGNORED="$GKR_IGNORED ${1%%=*}"; shift ;;
       --push)       GKR_PUSH=1; shift ;;
       # —— 带值、但 kaniko 无对应物的参数：连值一起吃掉，只记一笔 ——
-      --iidfile|--metadata-file|--cache-from|--cache-to|--secret|--ssh|--output|-o|--builder|--network|--shm-size|--label)
+      --iidfile)    GKR_IID=$2; shift 2 ;;
+      --metadata-file) GKR_META=$2; shift 2 ;;
+      --cache-from|--cache-to|--secret|--ssh|--output|-o|--builder|--network|--shm-size|--label)
                     GKR_IGNORED="$GKR_IGNORED $1"; shift 2 ;;
       # —— 布尔、无对应物的参数 ——
       --progress|--provenance|--sbom|--attest|--no-cache|--pull|--quiet|-q|--load|--compress)
@@ -67,6 +71,10 @@ parse_build() {
 submit() {
   [ -d "$SHARED" ] || die "这个 job 里没有 kaniko 容器（$SHARED 不存在）：请让平台把该 job 识别为构建任务"
   dir="$SHARED/req/$$-$(date +%s)"
+  meta=""; iid=""
+  for a in ${GKR_META:+"$GKR_META"}; do meta=$a; done
+  [ -z "${GKR_META:-}" ] || meta=$GKR_META
+  [ -z "${GKR_IID:-}" ] || iid=$GKR_IID
   mkdir -p "$dir"
   : > "$dir/args"
   printf '%s\n' "--context=dir://$GKR_CTX" "--dockerfile=$GKR_FILE" >> "$dir/args"
@@ -95,6 +103,15 @@ submit() {
     n=$(wc -c < "$dir/log"); [ "$n" -gt "$seen" ] && tail -c +$((seen + 1)) "$dir/log"
   fi
   rc=$(cat "$dir/rc" 2>/dev/null || echo 1)
+  # build-push-action 会读 --metadata-file / --iidfile 来算它的 outputs（digest 等）：
+  # kaniko 的日志里有 "Pushed …@sha256:…"，据此写一份同样的元数据。
+  digest=$(grep -oE '@sha256:[0-9a-f]{64}' "$dir/log" 2>/dev/null | head -1 | tr -d '@')
+  tags=$(printf '%s' "${GKR_DEST:-${GKR_TAGS:-}}" | tr ' ' ',' | sed 's/^,*//; s/,*$//')
+  if [ -n "$digest" ]; then
+    [ -z "$iid" ] || printf '%s' "$digest" > "$iid"
+    [ -z "$meta" ] || printf '{"containerimage.digest":"%s","containerimage.config.digest":"%s","image.name":"%s"}' \
+      "$digest" "$digest" "$tags" > "$meta"
+  fi
   rm -rf "$dir"
   exit "$rc"
 }
@@ -152,8 +169,27 @@ case "$cmd" in
     ;;
 
   tag)   log "tag 已忽略（构建时直接打目标 tag）" ;;
-  version|--version) echo "Docker version 27.0.0 (gitea-k8s-runner kaniko shim)" ;;
-  info)  echo "Server: kaniko (no docker daemon in this platform; the pod runs a kaniko container)" ;;
+  version|--version)
+    case " $* " in
+      *--format*) echo "27.0.0" ;;                    # action 里常见：--format '{{.Client.Version}}'
+      *) echo "Client: Docker Engine - Community (gitea-k8s-runner kaniko shim)\nServer: kaniko (no docker daemon)" ;;
+    esac ;;
+  info)
+    case " $* " in
+      *--format*) echo "27.0.0" ;;
+      *) echo "Server: kaniko (no docker daemon in this platform; builds run in the pod's kaniko container)" ;;
+    esac ;;
+
+  # 官方 setup-qemu-action 会 pull binfmt 镜像并 run 它注册模拟器。本平台不做多平台模拟
+  # （需要 binfmt/qemu → 需要特权，baseline 不许），所以这两步明确跳过并告警，不当成失败。
+  pull)  log "跳过 docker pull $*：本平台没有 docker daemon，镜像拉取由 kaniko 构建时完成" ;;
+  run)
+    case " $* " in
+      *binfmt*|*qemu*|*tonistiigi/binfmt*)
+        log "跳过 docker run $*：本平台不做多平台模拟构建（binfmt/QEMU 需要特权，安全基线不允许）" ;;
+      *)
+        die "本平台没有 docker daemon，不支持 docker run（只有 binfmt/QEMU 这类注册步骤会被跳过）" ;;
+    esac ;;
   "")    die "用法：docker {login|build|push|tag|version} ..." ;;
   *)     die "本平台没有 docker daemon，不支持 docker $cmd（可用：login / build / buildx build / push / tag）" ;;
 esac
