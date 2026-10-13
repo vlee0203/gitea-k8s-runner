@@ -13,16 +13,11 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// Identity is a persisted Gitea runner registration.
+// Identity is a persisted Gitea runner registration: the uuid and token Gitea
+// returned when the runner registered.
 type Identity struct {
 	UUID  string `json:"uuid"`
 	Token string `json:"token"`
-	// RunnerID is the id Gitea assigned, kept so the runner record can be
-	// deleted when this identity is rotated.
-	RunnerID int64 `json:"runner_id,omitempty"`
-	// Registered is when this identity was created (unix seconds); rotation is
-	// due once it is older than the configured age.
-	Registered int64 `json:"registered,omitempty"`
 }
 
 const dataKey = "identities"
@@ -64,22 +59,6 @@ func (s *Store) Get(ctx context.Context, key string) (Identity, bool, error) {
 	}
 	id, ok := m[key]
 	return id, ok, nil
-}
-
-// UUIDs returns the uuid of every identity this controller has registered, so
-// the runner audit can tell our own runners from foreign ones.
-func (s *Store) UUIDs(ctx context.Context) (map[string]bool, error) {
-	m, err := s.load(ctx)
-	if err != nil {
-		return nil, err
-	}
-	out := make(map[string]bool, len(m))
-	for _, id := range m {
-		if id.UUID != "" {
-			out[id.UUID] = true
-		}
-	}
-	return out, nil
 }
 
 // Put stores the identity under key.

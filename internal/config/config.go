@@ -61,22 +61,11 @@ type Config struct {
 	CacheServerSecret string
 	// RunnerImage provides the gitea-runner binary for pools that inject it.
 	RunnerImage string
-	// GiteaAPITokenFile and RunnerAuditPath enable the runner audit: the
-	// controller periodically lists the runners at RunnerAuditPath (e.g.
-	// /api/v1/user/actions/runners) and deletes any it did not register, so a
-	// leaked registration token cannot be used for long. Empty disables it.
-	GiteaAPIToken   string
-	RunnerAuditPath string
-	AuditInterval   time.Duration
 	// RegistrationTokenSecret names a k8s Secret (key "token") holding the
 	// registration token. When set, the controller reads it through the API
 	// instead of a mounted file, so no registration token is written to the pod
 	// filesystem and rotation needs no restart.
 	RegistrationTokenSecret string
-	// RotateAfter re-registers a worker identity older than this and deletes the
-	// runner it replaces, so a leaked runner credential stops working after at
-	// most this long. 0 disables rotation.
-	RotateAfter time.Duration
 	// ShutdownTimeout is how long in-flight jobs may drain before they are
 	// cancelled. Must not exceed the pod's terminationGracePeriodSeconds.
 	ShutdownTimeout time.Duration
@@ -105,31 +94,8 @@ func Load() (*Config, error) {
 		ImagePullSecret:         env("IMAGE_PULL_SECRET", ""),
 		CacheServerURL:          env("CACHE_SERVER_URL", ""),
 		RunnerImage:             env("RUNNER_IMAGE", ""),
-		RunnerAuditPath:         env("RUNNER_AUDIT_PATH", ""),
 		RegistrationTokenSecret: env("REGISTRATION_TOKEN_SECRET", ""),
-		AuditInterval:           10 * time.Minute,
 		ShutdownTimeout:         30 * time.Minute,
-	}
-	if v := env("ROTATE_AFTER", ""); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("ROTATE_AFTER: %w", err)
-		}
-		c.RotateAfter = d
-	}
-	if v := env("RUNNER_AUDIT_INTERVAL", ""); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("RUNNER_AUDIT_INTERVAL: %w", err)
-		}
-		c.AuditInterval = d
-	}
-	if f := env("GITEA_API_TOKEN_FILE", ""); f != "" {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return nil, fmt.Errorf("read Gitea API token %s: %w", f, err)
-		}
-		c.GiteaAPIToken = strings.TrimSpace(string(b))
 	}
 	if f := env("CACHE_SERVER_SECRET_FILE", ""); f != "" {
 		b, err := os.ReadFile(f)

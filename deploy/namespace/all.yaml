@@ -46,9 +46,15 @@ kind: ConfigMap
 metadata:
   name: gitea-k8s-runner-pools
 data:
+  # 池的 labels 就是「承诺」：Gitea 要求 job 的 runs-on 里每一个 label 都被 runner 声明过
+  # （models/actions/runner.go CanMatchLabels），所以一个池挂一串 label 就能覆盖一串 runs-on。
+  # 对齐 GitHub 的别名，让标准 workflow 零改动命中：GitHub 托管 runner 的 ubuntu-latest 同时带
+  # linux/x64/ubuntu-24.04 这些 label。**不要**声明 ubuntu-22.04：本池镜像是 Ubuntu 24.04
+  # （runner-images 带 LSB_RELEASE=24.04），声明了不会报错，只会静默地按错误环境跑。
+  # linux/x64 只给通用池：否则 runs-on: [self-hosted, linux] 会落到 kaniko 池上。
   pools.yaml: |
     pools:
-      - labels: [self-hosted, ubuntu-latest]
+      - labels: [self-hosted, linux, x64, ubuntu-latest, ubuntu-24.04]
         image: ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest
         resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
         slots: 2
