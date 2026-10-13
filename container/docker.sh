@@ -141,6 +141,8 @@ case "$cmd" in
     if [ "$cmd" = buildx ]; then
       sub=${1:-}; [ $# -gt 0 ] && shift || true
       case "$sub" in
+        # 裸 `docker buildx`（无子命令）：build-push-action 的 isAvailable 就是跑这个并看退出码
+        "")      printf 'github.com/docker/buildx v0.17.1 (kaniko shim)\n\nUsage: docker buildx [OPTIONS] COMMAND\n' ; exit 0 ;;
         build)  : ;;
         create|use|ls|rm|stop|prune)
                  log "buildx $sub：本平台没有 buildx builder（构建由 kaniko 完成）"; exit 0 ;;
@@ -174,6 +176,7 @@ case "$cmd" in
     ;;
 
   tag)   log "tag 已忽略（构建时直接打目标 tag）" ;;
+  logout) log "logout 已忽略（本平台凭据只写在共享目录里的 kaniko config，job 结束随 Pod 一起消失）" ;;
   version|--version)
     case " $* " in
       *--format*) echo "27.0.0" ;;                    # action 里常见：--format '{{.Client.Version}}'
@@ -226,6 +229,6 @@ case "$cmd" in
       *)
         die "本平台没有 docker daemon，不支持 docker run（只有 binfmt/QEMU 这类注册步骤会被跳过）" ;;
     esac ;;
-  "")    die "用法：docker {login|build|push|tag|version} ..." ;;
+  "")    printf 'Usage: docker [OPTIONS] COMMAND\n\n(docker shim for this platform: builds run in the pod'"'"'s kaniko container)\nAvailable: login, build, buildx build, push, tag, image inspect, images, context, version, info\n' ;;
   *)     die "本平台没有 docker daemon，不支持 docker $cmd（可用：login / build / buildx build / push / tag）" ;;
 esac
