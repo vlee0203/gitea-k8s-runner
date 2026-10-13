@@ -142,9 +142,14 @@ case "$cmd" in
       sub=${1:-}; [ $# -gt 0 ] && shift || true
       case "$sub" in
         build)  : ;;
+        create|use|ls|rm|stop|prune)
+                 log "buildx $sub：本平台没有 buildx builder（构建由 kaniko 完成）"; exit 0 ;;
         version) echo "github.com/docker/buildx v0.17.1 (kaniko shim)"; exit 0 ;;
-        create|use|ls|inspect|rm|stop|prune)
-                 log "buildx $sub：本平台没有 buildx builder，已忽略（构建由 kaniko 完成）"; exit 0 ;;
+        inspect)
+                 # setup-buildx-action 按行解析这张表（键: 值），并读每个 node 的 endpoint。
+                 name=default; while [ $# -gt 0 ]; do case "$1" in --builder) shift; name=$1; shift ;; *) shift ;; esac; done
+                 printf 'Name:          %s\nDriver:        docker-container\n\nNodes:\nName:          %s0\nEndpoint:      unix:///var/run/docker.sock\nStatus:        running\nBuildkit:      v0.17.1\nPlatforms:     linux/amd64\n' "$name" "$name"
+                 exit 0 ;;
         *)       die "不支持的 buildx 子命令：$sub" ;;
       esac
     fi
@@ -198,7 +203,18 @@ case "$cmd" in
   inspect)
     ref=${1:-unknown}
     printf '[{"Id":"sha256:%064d","RepoTags":["%s"],"Architecture":"amd64","Os":"linux","Config":{}}]' 0 "$ref" ;;
-  context)  echo "default" ;;
+  context)
+    sub=${1:-}; [ $# -gt 0 ] && shift || true
+    case "$sub" in
+      show) echo default ;;
+      inspect)
+        case " $* " in
+          *--format*) echo default ;;      # 常见：--format '{{.Name}}'
+          *) printf '[{"Name":"default","Metadata":{},"Endpoints":{"docker":{"Host":"unix:///var/run/docker.sock","SkipTLSVerify":false}}}]' ;;
+        esac ;;
+      ls)   printf '{"currentContext":"default","contexts":[{"Name":"default","Current":true}]}' ;;
+      *)    echo default ;;
+    esac ;;
   run)
     case " $* " in
       *binfmt*|*qemu*|*tonistiigi/binfmt*)
