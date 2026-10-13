@@ -171,7 +171,10 @@ exec /opt/gkr/gitea-runner daemon --once --labels "$GITEA_RUNNER_LABELS" $CFG
 var injectRunnerScript = "cp /usr/local/bin/gitea-runner /opt/gkr/gitea-runner" +
 	" && chmod +x /opt/gkr/gitea-runner" +
 	" && cat > /opt/gkr/entrypoint.sh <<'GKR_ENTRYPOINT'\n" + injectedEntrypoint + "GKR_ENTRYPOINT\n" +
-	" && chmod +x /opt/gkr/entrypoint.sh"
+	// The chmod must start its own line: a line cannot begin with "&&" after a
+	// heredoc, which is a shell syntax error (that failed the init container and
+	// killed the pod before the runner ever started).
+	"chmod +x /opt/gkr/entrypoint.sh"
 
 // Start creates the capability Secret then the executor Pod for one assignment.
 func (m *Manager) Start(ctx context.Context, s Spec) error {
