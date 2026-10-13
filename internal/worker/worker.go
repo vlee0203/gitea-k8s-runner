@@ -116,6 +116,16 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 		return
 	}
 
+	// 要构建/推送镜像的 job 不能跑在通用池的容器里：本平台只能靠 kaniko 构建，
+	// 而 kaniko 会把基础镜像解包到自己容器的根文件系统上，必须独占一个容器。
+	// 所以按 workflow 内容把它路由到构建环境（BUILD_IMAGE）；池的其它属性
+	// （资源、槽位、labels）照旧。
+	image, inject := w.pool.Image, w.pool.InjectRunner
+	if w.cfg.BuildImage != "" && needsImageBuild(t.GetWorkflowPayload(), job) {
+		image, inject = w.cfg.BuildImage, false
+		log.Printf("worker %v: job %s (%s) builds an image → 使用构建环境", w.pool.Labels, id, job)
+	}
+
 	capability := randomCapability()
 	a := facade.NewAssignment(t, capability, w.client)
 	w.facade.Add(a)
@@ -123,14 +133,14 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 
 	if err := w.exec.Start(ctx, executor.Spec{
 		AssignmentID:          id,
-		Image:                 w.pool.Image,
+		Image:                 image,
 		Labels:                w.pool.Labels,
 		Capability:            capability,
 		FacadeURL:             w.cfg.FacadeURL,
 		Resources:             resources(w.pool.Resources),
 		ImagePullSecret:       w.cfg.ImagePullSecret,
 		RunnerConfig:          w.cfg.CacheConfigYAML(),
-		InjectRunner:          w.pool.InjectRunner,
+		InjectRunner:          inject,
 		RunnerImage:           w.cfg.RunnerImage,
 		ActiveDeadlineSeconds: timeoutSeconds(w.pool.Timeout),
 		Repo:                  repo,
@@ -211,6 +221,43 @@ func unsupportedWorkflowFeatures(payload []byte, jobKey string) []string {
 		out = append(out, "services:")
 	}
 	return out
+}
+
+// needsImageBuild reports whether the job builds or pushes a container image,
+// either with the ordinary `docker build` / `docker push` / `docker login`, with
+// the official docker/* actions, or with kaniko directly. Those jobs have to run
+// in a container that can build (see the BuildImage field), so that a workflow
+// written for GitHub runs unchanged on runs-on: ubuntu-latest.
+func needsImageBuild(payload []byte, jobKey string) bool {
+	if jobKey == "" {
+		return false
+	}
+	var wf struct {
+		Jobs map[string]struct {
+			Steps []struct {
+				Uses string `yaml:"uses"`
+				Run  string `yaml:"run"`
+			} `yaml:"steps"`
+		} `yaml:"jobs"`
+	}
+	if err := yaml.Unmarshal(payload, &wf); err != nil {
+		return false
+	}
+	job, ok := wf.Jobs[jobKey]
+	if !ok {
+		return false
+	}
+	for _, step := range job.Steps {
+		if strings.HasPrefix(step.Uses, "docker/") {
+			return true
+		}
+		for _, marker := range []string{"docker build", "docker buildx", "docker push", "docker login", "kaniko/executor"} {
+			if strings.Contains(step.Run, marker) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // taskContext reads the (flat) context Gitea attached to the task; it is used
