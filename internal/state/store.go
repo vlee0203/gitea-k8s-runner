@@ -60,6 +60,22 @@ func (s *Store) Get(ctx context.Context, key string) (Identity, bool, error) {
 	return id, ok, nil
 }
 
+// UUIDs returns the uuid of every identity this controller has registered, so
+// the runner audit can tell our own runners from foreign ones.
+func (s *Store) UUIDs(ctx context.Context) (map[string]bool, error) {
+	m, err := s.load(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(m))
+	for _, id := range m {
+		if id.UUID != "" {
+			out[id.UUID] = true
+		}
+	}
+	return out, nil
+}
+
 // Put stores the identity under key.
 func (s *Store) Put(ctx context.Context, key string, id Identity) error {
 	m, err := s.load(ctx)

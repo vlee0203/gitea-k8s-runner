@@ -28,6 +28,7 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
+	"github.com/vlee0203/gitea-k8s-runner/internal/audit"
 	"github.com/vlee0203/gitea-k8s-runner/internal/config"
 	"github.com/vlee0203/gitea-k8s-runner/internal/executor"
 	"github.com/vlee0203/gitea-k8s-runner/internal/facade"
@@ -184,6 +185,14 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 	// task lives only in the dead facade), so clean them up and fail their tasks
 	// for Gitea to rerun.
 	lifecycle.New(exec, clients).Recover(jobCtx)
+
+	// Contain a leaked registration token: delete runners in scope that this
+	// controller did not register, so one cannot sit there harvesting jobs (and
+	// with them the repos' CI secrets).
+	if cfg.GiteaAPIToken != "" && cfg.RunnerAuditPath != "" {
+		a := audit.New(cfg.GiteaURL, cfg.RunnerAuditPath, cfg.GiteaAPIToken, store.UUIDs, cfg.AuditInterval)
+		go a.Run(jobCtx)
+	}
 
 	// An executor pod points its runner at this address (the facade), so the
 	// runner also treats it as the job's server URL — e.g. actions/checkout
