@@ -326,8 +326,12 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 			VolumeMounts:    []corev1.VolumeMount{shared},
 		})
 		sidecar = &corev1.Container{
-			Name:            "kaniko",
-			Image:           s.KanikoImage,
+			Name:  "kaniko",
+			Image: s.KanikoImage,
+			// 构建容器必须带上池的资源：不设就落到命名空间 LimitRange 的默认值
+			// （ns-admin 是 100Mi 临时存储），kaniko 解包基础镜像+打快照会立刻超限被驱逐 ——
+			// 表现为"构建跑到一半 pod 被 Evicted、job 被取消"（实测踩过）。
+			Resources:       s.Resources,
 			ImagePullPolicy: corev1.PullAlways,
 			Command:         []string{"sh", "-c", kanikoSidecarScript},
 			VolumeMounts:    []corev1.VolumeMount{shared},
