@@ -184,7 +184,11 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 				select {
 				case <-a.Done():
 				case <-time.After(reportGrace):
-					w.fail(ctx, t.Id, id, "executor ended without reporting a result")
+					if why := w.exec.StartFailure(ctx, id); why != "" {
+						w.fail(ctx, t.Id, id, "executor 无法启动: "+why)
+					} else {
+						w.fail(ctx, t.Id, id, "executor ended without reporting a result")
+					}
 				}
 				return
 			}

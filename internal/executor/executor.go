@@ -396,6 +396,17 @@ func (m *Manager) Phase(ctx context.Context, assignmentID string) (corev1.PodPha
 	return pod.Status.Phase, nil
 }
 
+// StartFailure returns why the pod for this assignment can never start ("" if it
+// may still make progress). The worker writes it into the job log, so the reason
+// shows up where the user looks, not only in the controller log.
+func (m *Manager) StartFailure(ctx context.Context, assignmentID string) string {
+	pod, err := m.find(ctx, assignmentID)
+	if err != nil || pod == nil {
+		return ""
+	}
+	return stuckReason(pod)
+}
+
 // stuckReason reports why a pod can never start, or "" if it may still make
 // progress. Only reasons that a retry cannot fix count: they mean the pod spec
 // or the image is wrong.
