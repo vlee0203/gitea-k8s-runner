@@ -189,7 +189,7 @@ case "$cmd" in
   images|image)
     sub=${1:-}; [ $# -gt 0 ] && shift || true
     case "$sub" in
-      ls|list) echo '[]' ;;
+      ""|ls|list) echo '[]' ;;          # `docker images` / `docker image ls`
       inspect)
         ref=${1:-unknown}
         printf '[{"Id":"sha256:%064d","RepoTags":["%s"],"Architecture":"amd64","Os":"linux","Config":{}}]' 0 "$ref" ;;
