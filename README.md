@@ -24,6 +24,7 @@ Gitea ──领取/回报──▶ controller ──建 Pod──▶ executor Po
 | [进阶 · 架构](docs/advanced/architecture.zh-cn.md) | 先领取 + facade 交接、一次性 Pod、状态恢复、单例与 drain |
 | [进阶 · 安全](docs/advanced/security.zh-cn.md) | 作用域隔离、平台只持注册令牌、刻意不做的事 |
 | [进阶 · 兼容矩阵](docs/advanced/compatibility.zh-cn.md) | 哪些可用、哪些是 Gitea 文档差异、哪些本平台做不到及原因 |
+| [进阶 · 平台公共 action](docs/advanced/actions-mirror.zh-cn.md) | 本地镜像了哪些 action、怎么再加、谁有权改 |
 | [进阶 · 开发](docs/advanced/development.zh-cn.md) | 代码结构、本地构建与测试、CI |
 | [帮助 · 排查](docs/help/troubleshooting.zh-cn.md) | 症状 → 原因 |
 

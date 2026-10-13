@@ -22,6 +22,7 @@ workflow 以 **GitHub Actions 标准**为准：`runs-on: ubuntu-latest`、`uses:
 | [进阶](advanced/architecture.zh-cn.md) | 架构与机制 | 先领取 + facade 交接、一次性 Pod、状态恢复、单例与 drain | 想改代码 / 排查深层问题 |
 | [进阶](advanced/security.zh-cn.md) | 安全模型 | 作用域隔离、平台只持注册令牌、**刻意不做**的那些事 | 安全评审 |
 | [进阶](advanced/compatibility.zh-cn.md) | 兼容矩阵 | 哪些 GitHub 能力可用、哪些是 Gitea 文档差异、哪些本平台做不到及原因 | 迁移既有 workflow |
+| [进阶](advanced/actions-mirror.zh-cn.md) | 平台公共 action | 本地镜像了哪些 action、怎么再加一个、谁有权改 | 用/维护 `uses:` 的 action 源 |
 | [帮助](help/troubleshooting.zh-cn.md) | 排查 | 症状 → 原因（静默失败、被驱逐、卡住、改了没生效…） | 出问题 |
 
 ## 相关
