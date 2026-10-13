@@ -6,6 +6,12 @@
 # 只有 kaniko 不挂载，能在这种限制下构建镜像。于是这里提供一个同名 `docker`，
 # 让 workflow 里的 `docker login` / `docker build` / `docker push` 一个字都不用改。
 #
+# 关键细节：kaniko 每次构建前会**清空容器根文件系统**（把要构建的基础镜像解包到 /）。
+# 所以构建前把 runner 自己需要的东西备份到 /kaniko（kaniko 不清自己的目录），构建后放回去 ——
+# 否则构建完之后 node（跑 JS action 用）、本 shim 自己、构建上下文都会被删，
+# 表现为"构建成功但后续步骤 fork/exec node: no such file"。runner 的 HOME 也由镜像设为
+# /kaniko/home（见 container/build.Dockerfile），让工作目录/构建上下落在同一块不会被清的地方。
+#
 # 覆盖：login、build、buildx build、push、tag、version、info。
 # 不覆盖（需要真 daemon，明确报错而不是静默失败）：run、compose、pull、exec、save、manifest …
 set -eu
@@ -57,6 +63,18 @@ parse_build() {
   printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$GKR_CTX" "$GKR_FILE" "$GKR_ARGS" "$GKR_TARGET" "$GKR_PLATFORM" "$GKR_TAGS" > "$SPEC"
 }
 
+KEEP=/kaniko/rt
+# 备份/恢复 runner 运行期依赖（kaniko 清空文件系统时只有 /kaniko 幸存）
+save_runtime() {
+  mkdir -p "$KEEP"
+  for p in /usr/local/bin/docker /usr/local/bin/node /usr/local/bin/npx /usr/local/bin/gitea-runner /usr/local/bin/run.sh; do
+    [ -e "$p" ] && cp -a "$p" "$KEEP/" 2>/dev/null || true
+  done
+}
+restore_runtime() {
+  for p in "$KEEP"/*; do [ -e "$p" ] && cp -a "$p" /usr/local/bin/ 2>/dev/null || true; done
+}
+
 # 用当前 GKR_* 跑一次 kaniko；GKR_DEST 非空则构建并推送，否则只构建
 run_kaniko() {
   args="--context=dir://$GKR_CTX --dockerfile=$GKR_FILE"
@@ -69,8 +87,12 @@ run_kaniko() {
     args="$args --no-push"
   fi
   log "kaniko $args"
+  save_runtime
   # shellcheck disable=SC2086
-  exec "$KANIKO" --verbosity=info $args
+  "$KANIKO" --verbosity=info $args
+  rc=$?
+  restore_runtime            # 无论成败都放回去：后续步骤（post action / docker push）还要用
+  exit $rc
 }
 
 cmd=${1:-}; [ $# -gt 0 ] && shift || true

@@ -23,4 +23,9 @@ COPY --from=kaniko /kaniko/executor /kaniko/executor
 COPY container/docker.sh /usr/local/bin/docker
 RUN chmod +x /usr/local/bin/docker /kaniko/executor
 
+# HOME 落在 /kaniko（kaniko 构建时不清自己的目录）：这样 runner 的工作目录与
+# 构建上下文不会被它自己的清空动作删掉。见 container/docker.sh 顶部说明。
+ENV HOME=/kaniko/home
+RUN mkdir -p /kaniko/home /kaniko/rt
+
 ENTRYPOINT ["/usr/local/bin/run.sh"]
