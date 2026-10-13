@@ -39,6 +39,7 @@ metadata:
   name: gitea-runner-cache
 spec:
   replicas: 1
+  revisionHistoryLimit: 1
   strategy:
     type: Recreate
   selector:
@@ -54,7 +55,11 @@ spec:
       #   - name: registry-pull
       containers:
         - name: cache
-          image: ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests: { cpu: 50m, memory: 100Mi }
+            limits: { cpu: 500m, memory: 1Gi }
+          image: ghcr.io/vlee0203/gitea-k8s-runner/runner@sha256:c83bd8f8681b4d0c2a6500848a983a2c9e454d4b926715e13b7693816b02d57e
           command:
             - /usr/local/bin/gitea-runner
             - cache-server

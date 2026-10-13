@@ -139,8 +139,8 @@ kubectl -n <ns> create configmap gitea-ca --from-file=ca.crt=corp-ca.crt
 ```
 
 清单里已经放好了注释块（`deploy/*/all.yaml` 搜 `gkr-ca`）：把 `SSL_CERT_FILE=/etc/gkr-ca/ca.crt`、
-`gkr-ca` 卷与卷挂载三处取消注释即可。**用 Sealos 模板则内置**：填 `ssl_cert_file` 与 `gitea_ca_configmap`
-两个输入就行（见 [Sealos 模板](#七sealos-模板)）。
+`gkr-ca` 卷与卷挂载三处取消注释即可。**做成 Sealos 模板的话**，把 CA 放进 ConfigMap、用一个
+`ssl_cert_file` 输入指向 `/etc/gkr-ca/ca.crt` 即可（见[第七节](#七做成-sealos-模板时的注意点)）。
 
 ### 执行 Pod（只在特定场景需要）
 
@@ -204,22 +204,19 @@ RUN update-ca-certificates
 | `cache` Deployment 一直 Pending | 没有可用 StorageClass（`cache.yaml` 是可选组件，直接跳过） |
 | workflow 里 `docker build` 卡住/找不到 kaniko | `KANIKO_IMAGE` 没换成内网地址 |
 
-## 七、Sealos 模板
+## 七、做成 Sealos 模板时的注意点
 
-目标集群也是 Sealos 的话，直接用模板部署，上面这些都在里面：
+目标集群也是 Sealos 的话，把本文这些取值落成模板（`index.yaml`）时，注意这几条 —— 都是踩过的：
 
-```
-deploy/sealos/template/gitea-k8s-runner/     # index.yaml + README.md/README_zh.md
-```
+- **执行 Pod 与 controller 同命名空间**：`SCOPE=namespace`，`TARGET_NAMESPACE` 用 fieldRef 取自己，
+  这样只需要该命名空间的 RBAC，不需要集群级权限。
+- **服务名用模板变量**：`FACADE_URL` 要指向本应用自己的 Service（`http://<app_name>:8080`）。
+- **CA 走 ConfigMap 而不是 Secret**（证书是公开材料）：一个 `gitea-ca` ConfigMap + `SSL_CERT_FILE`
+  输入；**不要给这个 ConfigMap 名留空** —— `volumes[].configMap.name` 为空会被 API 拒绝。
+- **执行 Pod 不需要 CA**（只跟集群内 facade 说 http），所以模板里只给 controller 装。
+- **镜像**：模板里钉不可变引用（`sha-<sha>` 标签或摘要），别钉 `latest`；内网填内网仓库地址。
+- **资源基线**：controller `limits 500m/1Gi`、`requests 50m/100Mi`，`revisionHistoryLimit: 1`，
+  `imagePullPolicy: IfNotPresent`；controller 需要 k8s API，用
+  `automountServiceAccountToken: false` + 投射令牌卷（token + `kube-root-ca.crt` + namespace）。
+- 打包成集群镜像：用 sealos-templates 仓库的 `scripts/build-cluster-image.sh <index.yaml> <镜像名>:<tag>`。
 
-必填两个输入（`gitea_url`、`registration_token`），内网再把 `runner_image` / `kaniko_image` 指向内网仓库；
-自签证书填 `gitea_ca_configmap`（默认 `gitea-ca`，先用 `kubectl create configmap` 把 CA 放进去）与
-`ssl_cert_file=/etc/gkr-ca/ca.crt`。
-
-模板只涉及本应用自己的命名空间（`SCOPE=namespace`：一次性执行 Pod 也建在该命名空间），因此只需要该
-命名空间的 RBAC，不需要集群级权限。要打成集群镜像：
-
-```bash
-# 见 sealos-templates 仓库的 scripts/build-cluster-image.sh
-bash scripts/build-cluster-image.sh deploy/sealos/template/gitea-k8s-runner/index.yaml <你的镜像名>:<tag>
-```
