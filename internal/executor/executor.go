@@ -159,12 +159,13 @@ const injectedEntrypoint = `#!/bin/sh
 set -e
 CFG=""
 if [ -n "$CONFIG_FILE" ]; then CFG="--config=$CONFIG_FILE"; fi
+# The injected-into image may have neither /tmp nor $HOME; the runner volume
+# always exists and is writable. cd before registering: register writes .runner
+# into the working directory and daemon reads it back from the same place.
+cd /opt/gkr
 TOKEN=$(cat /etc/gkr/` + CapabilityKey + `)
 /opt/gkr/gitea-runner register --instance "$GITEA_INSTANCE_URL" --token "$TOKEN" \
   --name "$GITEA_RUNNER_NAME" --labels "$GITEA_RUNNER_LABELS" --ephemeral --no-interactive $CFG
-# The injected-into image may have neither /tmp nor $HOME; the runner volume
-# always exists and is writable.
-cd /opt/gkr
 exec /opt/gkr/gitea-runner daemon --once --labels "$GITEA_RUNNER_LABELS" $CFG
 `
 
