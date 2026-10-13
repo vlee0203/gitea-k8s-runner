@@ -183,6 +183,22 @@ case "$cmd" in
   # 官方 setup-qemu-action 会 pull binfmt 镜像并 run 它注册模拟器。本平台不做多平台模拟
   # （需要 binfmt/qemu → 需要特权，baseline 不许），所以这两步明确跳过并告警，不当成失败。
   pull)  log "跳过 docker pull $*：本平台没有 docker daemon，镜像拉取由 kaniko 构建时完成" ;;
+
+  # 只读探测类命令：action 常用来取镜像 id / 列表 / 上下文。本平台没有本地镜像库，
+  # 给一个形状正确的空/占位结果，让它们不至于因此中断（它们本来也只是探测）。
+  images|image)
+    sub=${1:-}; [ $# -gt 0 ] && shift || true
+    case "$sub" in
+      ls|list) echo '[]' ;;
+      inspect)
+        ref=${1:-unknown}
+        printf '[{"Id":"sha256:%064d","RepoTags":["%s"],"Architecture":"amd64","Os":"linux","Config":{}}]' 0 "$ref" ;;
+      *) die "不支持的 docker image 子命令：$sub" ;;
+    esac ;;
+  inspect)
+    ref=${1:-unknown}
+    printf '[{"Id":"sha256:%064d","RepoTags":["%s"],"Architecture":"amd64","Os":"linux","Config":{}}]' 0 "$ref" ;;
+  context)  echo "default" ;;
   run)
     case " $* " in
       *binfmt*|*qemu*|*tonistiigi/binfmt*)
