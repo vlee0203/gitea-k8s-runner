@@ -47,6 +47,27 @@ buildah 都要挂载文件系统，没有 `CAP_SYS_ADMIN` 干不了）。唯一�
 `pull`（跳过+告警）、`run`（**只**跳过 binfmt/QEMU 注册调用，其它明确报错）、
 `--metadata-file`/`--iidfile`（从 kaniko 日志的 `Pushed …@sha256:` 取 digest，写成 action 读的元数据）。
 
+## 代理
+
+平台侧（在 controller 上设 `HTTP_PROXY/HTTPS_PROXY/NO_PROXY`，平台注入每个 Pod）见[部署](../installation/overview.zh-cn.md)。
+
+**workflow 也可以自带代理**（`env:`，或仓库 secret/variable 里给）——两条路径都通：
+
+- 它作用在**步骤**上（含 JS action；Node ≥ 20 还需要 `NODE_USE_ENV_PROXY=1` 才会用它）。
+- 构建部分：替身会把本次步骤看到的代理设置**一并转交给 kaniko 容器**，所以拉基础镜像、推镜像也走它。
+  转交时 `NO_PROXY` 取「workflow 那份 + 平台那份（`GKR_PLATFORM_NO_PROXY`）」的**并集**——即使 workflow
+  里漏写集群内地址，也不会把 Gitea / facade 的流量送进代理。
+
+实测（workflow 里把 `HTTPS_PROXY` 指到一个死端口）：
+
+```
+NO_PROXY=localhost,127.0.0.1,::1,kubernetes.default.svc,.svc,.svc.cluster.local,gitea-xejbddyy,...   ← 平台注入
+[docker] 转交代理设置给 kaniko 容器：HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 NO_PROXY=...
+error building image: Get "https://docker.gitea.com/v2/": proxyconnect tcp: dial tcp 127.0.0.1:9: connect: connection refused
+```
+
+同一次运行里 `actions/checkout@v4` 照常成功——集群内地址在 `NO_PROXY` 里，不受用户代理影响。
+
 ## 已知边界
 
 | 边界 | 说明 |
