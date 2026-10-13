@@ -69,9 +69,6 @@ The following user-facing inputs are available during deployment:
 |------|-------------|----------|---------|
 | `gitea_url` | Gitea instance URL | `true` | — |
 | `registration_token` | Runner registration token (site/user/repo scoped) | `true` | `<redacted>` |
-| `controller_image` | Controller image (point at your own registry on an air-gapped cluster) | `true` | `ghcr.io/vlee0203/gitea-k8s-runner/controller@sha256:b10c7159e1660c0a211d3a099055d8e08abc3045becaab7eab4992bcb88d12d9` |
-| `runner_image` | Execution environment image (point at your own registry on an air-gapped cluster) | `true` | `ghcr.io/vlee0203/gitea-k8s-runner/runner@sha256:c83bd8f8681b4d0c2a6500848a983a2c9e454d4b926715e13b7693816b02d57e` |
-| `kaniko_image` | kaniko image used when a workflow builds images | `true` | `ghcr.io/osscontainertools/kaniko:v1.28.6-debug` |
 | `ssl_cert_file` | Set to `/etc/gkr-ca/ca.crt` when `gitea_url` uses a self-signed/private CA; leave empty otherwise | `false` | `` (empty) |
 | `gitea_ca_configmap` | Name of the CA ConfigMap described above. Do **not** clear it | `true` | `gitea-ca` |
 | `pool_cpu` / `pool_memory` | Per-job CPU / memory limit | `false` | `2` / `4Gi` |
@@ -80,17 +77,23 @@ The following user-facing inputs are available during deployment:
 | `pool_timeout` | Per-job timeout (`1h`, `30m`, …) | `false` | `1h` |
 | `http_proxy` / `https_proxy` / `no_proxy` | Egress proxy for executor Pods; in-cluster addresses are appended to `no_proxy` automatically | `false` | `` (empty) |
 
+**Air-gapped clusters**: the image references are hardcoded. Before deploying, replace these four places in
+`index.yaml` with your own registry (a one-line `sed` is in the air-gapped deployment doc):
+
+| Where | What |
+| --- | --- |
+| `Deployment.spec.template.spec.containers[].image` and `metadata.annotations.originImageName` | controller image (keep the two in sync) |
+| the pools `image:` in the ConfigMap and the `RUNNER_IMAGE` env | execution environment image (keep the two in sync) |
+| the `KANIKO_IMAGE` env | kaniko image |
+
 Keep sensitive values in Sealos-managed inputs or generated defaults. Do not commit private credentials to the
 template repository.
 
 Two more notes worth reading before you rely on this in production:
 
-- **Runners must be able to pull `runner_image`.** On an air-gapped cluster mirror it into your own registry and
-  point the input there; the same applies to `kaniko_image`. Workflow `docker build` steps pull their `FROM`
   base images at run time, so those must be reachable too.
 - **If workflows push images to a Gitea container registry that uses a self-signed certificate**, the kaniko
   container (not just the controller) must trust that CA — use a derived kaniko image with the CA baked in and
-  set `kaniko_image` accordingly.
 
 ## Official Links
 

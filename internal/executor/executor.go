@@ -357,7 +357,7 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 			Name:  "kaniko",
 			Image: s.KanikoImage,
 			// 构建容器必须带上池的资源：不设就落到命名空间 LimitRange 的默认值
-			// （ns-admin 是 100Mi 临时存储），kaniko 解包基础镜像+打快照会立刻超限被驱逐 ——
+			// （默认 LimitRange 是 100Mi 临时存储），kaniko 解包基础镜像+打快照会立刻超限被驱逐 ——
 			// 表现为"构建跑到一半 pod 被 Evicted、job 被取消"（实测踩过）。
 			Resources:       s.Resources,
 			Env:             proxyEnvVars(s.ProxyEnv), // kaniko 拉推镜像也要走代理

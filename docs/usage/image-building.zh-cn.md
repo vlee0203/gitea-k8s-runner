@@ -61,7 +61,7 @@ buildah 都要挂载文件系统，没有 `CAP_SYS_ADMIN` 干不了）。唯一�
 实测（workflow 里把 `HTTPS_PROXY` 指到一个死端口）：
 
 ```
-NO_PROXY=localhost,127.0.0.1,::1,kubernetes.default.svc,.svc,.svc.cluster.local,gitea-xejbddyy,...   ← 平台注入
+NO_PROXY=localhost,127.0.0.1,::1,kubernetes.default.svc,.svc,.svc.cluster.local,<gitea>.<ns>,...   ← 平台注入
 [docker] 转交代理设置给 kaniko 容器：HTTP_PROXY=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9 NO_PROXY=...
 error building image: Get "https://docker.gitea.com/v2/": proxyconnect tcp: dial tcp 127.0.0.1:9: connect: connection refused
 ```

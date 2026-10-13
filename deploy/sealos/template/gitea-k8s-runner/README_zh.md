@@ -63,9 +63,6 @@ job 变绿就说明整条链路通了；`kubectl get pods` 能在应用命名空
 |------|------|------|--------|
 | `gitea_url` | Gitea 实例地址 | `true` | — |
 | `registration_token` | runner 注册令牌（站点级/用户级/仓库级） | `true` | 已打码 |
-| `controller_image` | controller 镜像（内网集群指向自己的仓库） | `true` | `ghcr.io/vlee0203/gitea-k8s-runner/controller@sha256:b10c7159e1660c0a211d3a099055d8e08abc3045becaab7eab4992bcb88d12d9` |
-| `runner_image` | 执行环境镜像（内网集群指向自己的仓库） | `true` | `ghcr.io/vlee0203/gitea-k8s-runner/runner@sha256:c83bd8f8681b4d0c2a6500848a983a2c9e454d4b926715e13b7693816b02d57e` |
-| `kaniko_image` | workflow 里构建镜像时用的 kaniko 镜像 | `true` | `ghcr.io/osscontainertools/kaniko:v1.28.6-debug` |
 | `ssl_cert_file` | `gitea_url` 用自签/企业 CA 时填 `/etc/gkr-ca/ca.crt`，否则留空 | `false` | 空 |
 | `gitea_ca_configmap` | 上面那个 CA ConfigMap 的名字。**不要清空** | `true` | `gitea-ca` |
 | `pool_cpu` / `pool_memory` | 单个 job 的 CPU / 内存上限 | `false` | `2` / `4Gi` |
@@ -74,14 +71,20 @@ job 变绿就说明整条链路通了；`kubectl get pods` 能在应用命名空
 | `pool_timeout` | 单 job 超时（`1h`、`30m`…） | `false` | `1h` |
 | `http_proxy` / `https_proxy` / `no_proxy` | 执行 Pod 出网代理；集群内地址会自动追加进 `no_proxy` | `false` | 空 |
 
+**内网集群**：镜像地址是写死的，部署前把 `index.yaml` 里这四处换成内网仓库（一条 sed 见内网部署文档）：
+
+| 位置 | 是什么 |
+| --- | --- |
+| `Deployment.spec.template.spec.containers[].image` 与 `metadata.annotations.originImageName` | controller 镜像（两处必须一致） |
+| `ConfigMap` 里 pools 的 `image:` 与 env `RUNNER_IMAGE` | 执行环境镜像（两处必须一致） |
+| env `KANIKO_IMAGE` | kaniko 镜像 |
+
 敏感值请放在 Sealos 托管的输入或自动生成项里，不要把私密凭据提交进模板仓库。
 
 上生产前还有两点值得读一下：
 
-- **runner 必须能拉到 `runner_image`。** 内网集群把它镜像进自己的仓库再把该输入指过去；`kaniko_image`
   同理。workflow 里 `docker build` 的 `FROM` 基础镜像是运行时拉的，也得能拉到。
 - **如果 workflow 要往"用自签证书的 Gitea 容器仓库"推镜像**，那不只是 controller，**kaniko 容器**也得信任
-  这个 CA —— 用一个把 CA 烧进去的派生 kaniko 镜像，并把 `kaniko_image` 指过去。
 
 ## 官方链接
 

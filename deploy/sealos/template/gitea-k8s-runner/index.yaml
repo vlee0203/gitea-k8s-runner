@@ -31,21 +31,6 @@ spec:
       type: string
       default: ''
       required: true
-    controller_image:
-      description: 'Controller image. Point it at your own registry on an air-gapped cluster; pin your own digest when you build a derived image.'
-      type: string
-      default: 'ghcr.io/vlee0203/gitea-k8s-runner/controller@sha256:b10c7159e1660c0a211d3a099055d8e08abc3045becaab7eab4992bcb88d12d9'
-      required: true
-    runner_image:
-      description: 'Execution environment image: provides the toolchain and the runner binary. Point it at your own registry on an air-gapped cluster.'
-      type: string
-      default: 'ghcr.io/vlee0203/gitea-k8s-runner/runner@sha256:c83bd8f8681b4d0c2a6500848a983a2c9e454d4b926715e13b7693816b02d57e'
-      required: true
-    kaniko_image:
-      description: 'kaniko image used when a workflow builds or pushes images'
-      type: string
-      default: 'ghcr.io/osscontainertools/kaniko:v1.28.6-debug'
-      required: true
     ssl_cert_file:
       description: 'Set to /etc/gkr-ca/ca.crt when gitea_url uses a self-signed or private CA; leave empty for a publicly trusted certificate'
       type: string
@@ -175,7 +160,8 @@ data:
       # standard workflows match without edits.
       # Do not declare ubuntu-22.04: the image base is Ubuntu 24.04.
       - labels: [self-hosted, linux, x64, ubuntu-latest, ubuntu-24.04]
-        image: ${{ inputs.runner_image }}
+        # 内网：换成内网仓库里的 runner 镜像
+        image: ghcr.io/vlee0203/gitea-k8s-runner/runner@sha256:c83bd8f8681b4d0c2a6500848a983a2c9e454d4b926715e13b7693816b02d57e
         resources: { cpu: "${{ inputs.pool_cpu }}", memory: ${{ inputs.pool_memory }}, ephemeralStorage: ${{ inputs.pool_ephemeral_storage }} }
         slots: ${{ inputs.pool_slots }}
         timeout: ${{ inputs.pool_timeout }}
@@ -186,7 +172,8 @@ kind: Deployment
 metadata:
   name: ${{ defaults.app_name }}
   annotations:
-    originImageName: ${{ inputs.controller_image }}
+    # 内网：把这里与下面容器 image 一起换成内网仓库地址（两处必须一致）
+    originImageName: ghcr.io/vlee0203/gitea-k8s-runner/controller@sha256:b10c7159e1660c0a211d3a099055d8e08abc3045becaab7eab4992bcb88d12d9
     deploy.cloud.sealos.io/minReplicas: '1'
     deploy.cloud.sealos.io/maxReplicas: '1'
   labels:
@@ -215,7 +202,7 @@ spec:
       terminationGracePeriodSeconds: 3660
       containers:
         - name: ${{ defaults.app_name }}
-          image: ${{ inputs.controller_image }}
+          image: ghcr.io/vlee0203/gitea-k8s-runner/controller@sha256:b10c7159e1660c0a211d3a099055d8e08abc3045becaab7eab4992bcb88d12d9
           imagePullPolicy: IfNotPresent
           resources:
             requests: { cpu: 50m, memory: 100Mi }
@@ -235,8 +222,8 @@ spec:
             - { name: FACADE_URL, value: 'http://${{ defaults.app_name }}:8080' }
             - { name: POOLS_FILE, value: /etc/pools/pools.yaml }
             - { name: SHUTDOWN_TIMEOUT, value: 30m }
-            - { name: RUNNER_IMAGE, value: '${{ inputs.runner_image }}' }
-            - { name: KANIKO_IMAGE, value: '${{ inputs.kaniko_image }}' }
+            - { name: RUNNER_IMAGE, value: 'ghcr.io/vlee0203/gitea-k8s-runner/runner@sha256:c83bd8f8681b4d0c2a6500848a983a2c9e454d4b926715e13b7693816b02d57e' }
+            - { name: KANIKO_IMAGE, value: 'ghcr.io/osscontainertools/kaniko:v1.28.6-debug' }
             # Go reads SSL_CERT_FILE; an empty value is ignored, so this line is inert unless a CA
             # is configured. Only the controller needs to trust a private CA.
             - { name: SSL_CERT_FILE, value: '${{ inputs.ssl_cert_file }}' }
