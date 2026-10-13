@@ -39,15 +39,25 @@ GOWORK=off go vet ./...
 
 ## 镜像与 CI
 
-`.github/workflows/build.yaml`（push 到 main / 手动触发）构建并推送两个镜像：
+`.github/workflows/build.yaml`（push 到 main / 打 `v*` tag / 手动触发）构建并推送两个镜像，**每个都是
+`linux/amd64` + `linux/arm64` 双架构**：
 
-```
-ghcr.io/vlee0203/gitea-k8s-runner/controller:latest        ← container/controller.Dockerfile
-ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest     ← container/runner.Dockerfile
-```
+| 镜像 | 来源 | 标签 |
+| --- | --- | --- |
+| `ghcr.io/vlee0203/gitea-k8s-runner/controller` | `container/controller.Dockerfile` | `sha-<完整 commit sha>`、`latest`（main 上）；打 `vX.Y.Z` tag 时另有 `vX.Y.Z` |
+| `ghcr.io/vlee0203/gitea-k8s-runner/runner` | `container/runner.Dockerfile` | 同上，另有历史沿用的 `ubuntu-latest` |
 
-该 workflow 本身用标准 GitHub 写法（`checkout` + `docker/login-action` + `docker/build-push-action`），
-**也能原样跑在 Gitea 上**（只需把 registry 与登录凭据换成 Gitea 的），见[在 workflow 里构建镜像](../usage/image-building.zh-cn.md)。
+**部署清单与 Sealos 模板钉 `sha-<sha>`**（不可变），不要钉 `latest` —— 后者会被下一次构建覆盖。
+
+多架构不额外花钱：构建阶段用 `--platform=$BUILDPLATFORM` 在 builder 上交叉编译（Go 目标架构来自
+`TARGETOS/TARGETARCH`），不需要 QEMU 跑编译；两个基础镜像（`golang` / `distroless`、以及 runner 的
+`docker.gitea.com/runner` 与 `runner-images`）本身都发布双架构。
+
+该 workflow 本身用标准 GitHub 写法（`checkout` + `setup-qemu` + `setup-buildx` + `login` + `metadata` +
+`build-push`），**也能原样跑在 Gitea 上**（只需把 registry 与登录凭据换成 Gitea 的），见
+[在 workflow 里构建镜像](../usage/image-building.zh-cn.md)。**但多平台那一步在 Gitea 侧跑不了**：
+集群里没有 binfmt/QEMU 注册且安全基线不允许特权，平台的 `docker` 替身会明确报错而不是静默降级
+（自举构建请在 GitHub 上跑，或临时把 `platforms` 改成单架构）。
 
 ## 改动时注意
 

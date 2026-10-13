@@ -2,9 +2,10 @@
 # ordinary `run:` steps work) plus the stock gitea-runner, which registers
 # against the controller's facade and runs exactly one job in host mode.
 #
-# TODO(verify): confirm the runner binary/entrypoint paths in the pinned
-# docker.gitea.com/runner image before relying on the copy below; keep the version
-# pinned (not :nightly) once validated.
+# Multi-arch: both base images publish linux/amd64 and linux/arm64 (docker.gitea.com
+# runner: amd64/arm64/riscv64/s390x; runner-images: amd64/arm64), so buildx pulls the
+# matching variant per platform. TODO: pin the runner base to a version tag instead of
+# :nightly once a version is validated end to end.
 FROM docker.gitea.com/runner:nightly AS runner
 
 FROM docker.gitea.com/runner-images:ubuntu-latest

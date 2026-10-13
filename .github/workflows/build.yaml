@@ -3,41 +3,79 @@ name: build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
 
+# 镜像标签规则（docker/metadata-action）：
+#   main 上         → sha-<完整 commit sha> + latest
+#   打 vX.Y.Z tag   → sha-<完整 commit sha> + vX.Y.Z
+# sha- 前缀那个是**不可变**的：部署清单/Sealos 模板钉它（别钉 latest），
+# 换版本时改一处即可，内网 skopeo copy 也能连 tag 一起带走。
+#
+# 多架构：linux/amd64 + linux/arm64。基础镜像都同时发布两个架构，构建阶段在
+# builder 平台上交叉编译（不需要 QEMU 跑 Go），所以多出的一架构几乎不花时间。
+# 注意：本仓库的 gitea-k8s-runner 平台自身**不能**跑这个 workflow 的多平台步骤
+# （集群里没有 binfmt/QEMU，且安全基线不允许特权），自举构建请在 GitHub 上跑。
+
 jobs:
   controller:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/controller
+          tags: |
+            type=sha,format=long,prefix=sha-
+            type=ref,event=tag
+            type=raw,value=latest,enable={{is_default_branch}}
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: container/controller.Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository }}/controller:latest
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
 
   runner:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/runner
+          tags: |
+            type=sha,format=long,prefix=sha-
+            type=ref,event=tag
+            type=raw,value=latest,enable={{is_default_branch}}
+            # 老 tag，部署清单与池配置都在用，别去掉
+            type=raw,value=ubuntu-latest,enable={{is_default_branch}}
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: container/runner.Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository }}/runner:ubuntu-latest
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
