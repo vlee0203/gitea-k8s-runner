@@ -83,6 +83,9 @@ docker/podman/buildah 都要挂载），能用的只有 kaniko；而 **kaniko �
 （它的 README 明确写了，也会清空自己容器的文件系统来解包基础镜像）——挤进 runner 容器会把 runner
 的 node、工作目录、构建上下文一起删掉。
 
+构建容器会用该 job 所落池的 `resources`（尤其是 `ephemeralStorage`——kaniko 解包基础镜像+打快照需要
+GB 级临时空间；池里不写、命名空间有 LimitRange 默认值时，构建跑到一半就会被驱逐）。
+
 已知边界：`docker build` 之后单独 `docker push` 时，kaniko 没有本地镜像库，push 会按同样的参数
 **重新构建一次**再推（多个 tag 会一次推完）；多平台构建（`--platform=a,b`）做不到；需要真 daemon 的
 用法（`docker run`/`compose`）明确报错，不静默失败。
