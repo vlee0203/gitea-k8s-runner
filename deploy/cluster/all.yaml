@@ -145,12 +145,13 @@ spec:
             secretName: gitea-runner-cache
             optional: true
             items: [{ key: secret, path: secret }]
-        # Gitea 用自签/企业 CA 时打开这三个（连同上面的 SSL_CERT_FILE 与 volumeMount）：
-        #   kubectl -n <ns> create secret generic gitea-ca --from-file=ca.crt=corp-ca.crt
-        # optional: true 让这个 Secret 不存在时也不阻塞 Pod 启动。
+        # Gitea 用自签/企业 CA 时打开这三个（连同上面的 SSL_CERT_FILE 与 volumeMount）。
+        # CA 证书是公开材料，用 ConfigMap 而不是 Secret：
+        #   kubectl -n <ns> create configmap gitea-ca --from-file=ca.crt=corp-ca.crt
+        # optional: true 让这个 ConfigMap 不存在时也不阻塞 Pod 启动。
         # - name: gkr-ca
-        #   secret:
-        #     secretName: gitea-ca
+        #   configMap:
+        #     name: gitea-ca
         #     optional: true
         #     items: [{ key: ca.crt, path: ca.crt }]
 ---

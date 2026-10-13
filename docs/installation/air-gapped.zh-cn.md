@@ -129,14 +129,14 @@ kubectl -n <gitea-ns> set env sts/<gitea> \
 
 ### controller（必需）
 
-建一个 CA Secret、挂进 Deployment、设 `SSL_CERT_FILE`（Go 标准库认这个变量）：
+把 CA 放进一个 ConfigMap（证书是公开材料，不必用 Secret），挂进 Deployment 并设 `SSL_CERT_FILE`（Go 标准库认这个变量）：
 
 ```bash
-kubectl -n <ns> create secret generic gitea-ca --from-file=ca.crt=corp-ca.crt
+kubectl -n <ns> create configmap gitea-ca --from-file=ca.crt=corp-ca.crt
 ```
 
 清单里已经放好了注释块（`deploy/*/all.yaml` 搜 `gkr-ca`）：把 `SSL_CERT_FILE=/etc/gkr-ca/ca.crt`、
-`gkr-ca` 卷与卷挂载三处取消注释即可。**用 Sealos 模板则内置**：填 `ssl_cert_file` 与 `gitea_ca_secret`
+`gkr-ca` 卷与卷挂载三处取消注释即可。**用 Sealos 模板则内置**：填 `ssl_cert_file` 与 `gitea_ca_configmap`
 两个输入就行（见 [Sealos 模板](#七sealos-模板)）。
 
 ### 执行 Pod（只在特定场景需要）
@@ -210,7 +210,7 @@ deploy/sealos/template/gitea-k8s-runner/     # index.yaml + README.md/README_zh.
 ```
 
 必填两个输入（`gitea_url`、`registration_token`），内网再把 `runner_image` / `kaniko_image` 指向内网仓库；
-自签证书填 `gitea_ca_secret`（默认 `gitea-ca`，先用 `kubectl create secret` 把 CA 放进去）与
+自签证书填 `gitea_ca_configmap`（默认 `gitea-ca`，先用 `kubectl create configmap` 把 CA 放进去）与
 `ssl_cert_file=/etc/gkr-ca/ca.crt`。
 
 模板只涉及本应用自己的命名空间（`SCOPE=namespace`：一次性执行 Pod 也建在该命名空间），因此只需要该

@@ -25,7 +25,7 @@ Deployment，以及它建/删一次性 Pod 所需的 ServiceAccount/Role；执�
 
 ```bash
 kubectl -n <Sealos 给这个应用分配的命名空间> \
-  create secret generic gitea-ca --from-file=ca.crt=corp-ca.crt
+  create configmap gitea-ca --from-file=ca.crt=corp-ca.crt
 ```
 
 并把 `ssl_cert_file` 填成 `/etc/gkr-ca/ca.crt`。（只有 **controller** 需要信任这个 CA：执行 Pod 全程只跟
@@ -63,11 +63,11 @@ job 变绿就说明整条链路通了；`kubectl get pods` 能在应用命名空
 |------|------|------|--------|
 | `gitea_url` | Gitea 实例地址 | `true` | — |
 | `registration_token` | runner 注册令牌（站点级/用户级/仓库级） | `true` | 已打码 |
-| `controller_image` | controller 镜像（内网集群指向自己的仓库） | `true` | `ghcr.io/vlee0203/gitea-k8s-runner/controller:latest` |
-| `runner_image` | 执行环境镜像（内网集群指向自己的仓库） | `true` | `ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest` |
+| `controller_image` | controller 镜像（内网集群指向自己的仓库） | `true` | `ghcr.io/vlee0203/gitea-k8s-runner/controller@sha256:b10c7159e1660c0a211d3a099055d8e08abc3045becaab7eab4992bcb88d12d9` |
+| `runner_image` | 执行环境镜像（内网集群指向自己的仓库） | `true` | `ghcr.io/vlee0203/gitea-k8s-runner/runner@sha256:c83bd8f8681b4d0c2a6500848a983a2c9e454d4b926715e13b7693816b02d57e` |
 | `kaniko_image` | workflow 里构建镜像时用的 kaniko 镜像 | `true` | `ghcr.io/osscontainertools/kaniko:v1.28.6-debug` |
 | `ssl_cert_file` | `gitea_url` 用自签/企业 CA 时填 `/etc/gkr-ca/ca.crt`，否则留空 | `false` | 空 |
-| `gitea_ca_secret` | 上面那个 CA Secret 的名字。**不要清空** | `true` | `gitea-ca` |
+| `gitea_ca_configmap` | 上面那个 CA ConfigMap 的名字。**不要清空** | `true` | `gitea-ca` |
 | `pool_cpu` / `pool_memory` | 单个 job 的 CPU / 内存上限 | `false` | `2` / `4Gi` |
 | `pool_ephemeral_storage` | 单个 job 的临时磁盘。要明显高于命名空间 `LimitRange` 的默认值，否则 checkout 或构建镜像会把 Pod 驱逐 | `false` | `10Gi` |
 | `pool_slots` | 并发 job 数 | `false` | `2` |

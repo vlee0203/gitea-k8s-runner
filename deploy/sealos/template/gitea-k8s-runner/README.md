@@ -29,7 +29,7 @@ If that Gitea uses a **self-signed or corporate CA certificate**, do these two s
 
 ```bash
 kubectl -n <the namespace Sealos shows for this app> \
-  create secret generic gitea-ca --from-file=ca.crt=corp-ca.crt
+  create configmap gitea-ca --from-file=ca.crt=corp-ca.crt
 ```
 
 and set `ssl_cert_file` to `/etc/gkr-ca/ca.crt`. (Only the controller needs to trust the CA: executor Pods talk
@@ -69,11 +69,11 @@ The following user-facing inputs are available during deployment:
 |------|-------------|----------|---------|
 | `gitea_url` | Gitea instance URL | `true` | — |
 | `registration_token` | Runner registration token (site/user/repo scoped) | `true` | `<redacted>` |
-| `controller_image` | Controller image (point at your own registry on an air-gapped cluster) | `true` | `ghcr.io/vlee0203/gitea-k8s-runner/controller:latest` |
-| `runner_image` | Execution environment image (point at your own registry on an air-gapped cluster) | `true` | `ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest` |
+| `controller_image` | Controller image (point at your own registry on an air-gapped cluster) | `true` | `ghcr.io/vlee0203/gitea-k8s-runner/controller@sha256:b10c7159e1660c0a211d3a099055d8e08abc3045becaab7eab4992bcb88d12d9` |
+| `runner_image` | Execution environment image (point at your own registry on an air-gapped cluster) | `true` | `ghcr.io/vlee0203/gitea-k8s-runner/runner@sha256:c83bd8f8681b4d0c2a6500848a983a2c9e454d4b926715e13b7693816b02d57e` |
 | `kaniko_image` | kaniko image used when a workflow builds images | `true` | `ghcr.io/osscontainertools/kaniko:v1.28.6-debug` |
 | `ssl_cert_file` | Set to `/etc/gkr-ca/ca.crt` when `gitea_url` uses a self-signed/private CA; leave empty otherwise | `false` | `` (empty) |
-| `gitea_ca_secret` | Name of the CA Secret described above. Do **not** clear it | `true` | `gitea-ca` |
+| `gitea_ca_configmap` | Name of the CA ConfigMap described above. Do **not** clear it | `true` | `gitea-ca` |
 | `pool_cpu` / `pool_memory` | Per-job CPU / memory limit | `false` | `2` / `4Gi` |
 | `pool_ephemeral_storage` | Per-job ephemeral storage. Keep it well above any namespace `LimitRange` default, otherwise checkout or image builds evict the Pod | `false` | `10Gi` |
 | `pool_slots` | How many jobs run concurrently | `false` | `2` |
