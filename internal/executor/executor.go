@@ -162,7 +162,9 @@ if [ -n "$CONFIG_FILE" ]; then CFG="--config=$CONFIG_FILE"; fi
 TOKEN=$(cat /etc/gkr/` + CapabilityKey + `)
 /opt/gkr/gitea-runner register --instance "$GITEA_INSTANCE_URL" --token "$TOKEN" \
   --name "$GITEA_RUNNER_NAME" --labels "$GITEA_RUNNER_LABELS" --ephemeral --no-interactive $CFG
-cd /tmp
+# The injected-into image may have neither /tmp nor $HOME; the runner volume
+# always exists and is writable.
+cd /opt/gkr
 exec /opt/gkr/gitea-runner daemon --once --labels "$GITEA_RUNNER_LABELS" $CFG
 `
 
@@ -220,8 +222,11 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 	var initContainers []corev1.Container
 	if s.InjectRunner {
 		// The job image (e.g. kaniko) has no runner in it, so copy one in and
-		// start it with a POSIX-sh entrypoint that image can execute.
+		// start it with a POSIX-sh entrypoint that image can execute. HOME is
+		// pointed at the runner volume too: such images often lack /root and
+		// /tmp, and the runner writes state under both.
 		runner.Command = []string{"/opt/gkr/entrypoint.sh"}
+		runner.Env = append(runner.Env, corev1.EnvVar{Name: "HOME", Value: "/opt/gkr"})
 		runner.VolumeMounts = append(runner.VolumeMounts,
 			corev1.VolumeMount{Name: injectedRunnerVolume, MountPath: "/opt/gkr"})
 		volumes = append(volumes, corev1.Volume{
