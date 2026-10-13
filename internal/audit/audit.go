@@ -79,24 +79,24 @@ func (a *Auditor) Once(ctx context.Context) error {
 		return fmt.Errorf("list runners: %w", err)
 	}
 
+	mine, foreign := 0, 0
 	for i := range list.Runners {
 		r := list.Runners[i]
-		// Match on uuid: that is the identity this controller holds, and a
-		// foreign runner cannot forge it. Names are only a fallback for API
-		// responses that do not carry the uuid.
-		if r.UUID != "" {
-			if known[r.UUID] {
-				continue
-			}
-		} else if known["name:"+r.Name] || known[r.Name] {
+		// The runner list API does not expose the uuid, so identify our own
+		// runners by name — that name is deterministic (WorkerName + pool key).
+		// Both are checked so this keeps working if the API starts returning uuids.
+		if known[r.UUID] || known[r.Name] {
+			mine++
 			continue
 		}
-		log.Printf("runner audit: WARNING deleting runner %q (id %d, uuid %q) — not registered by this controller; a registration token has probably leaked",
-			r.Name, r.ID, r.UUID)
+		foreign++
+		log.Printf("runner audit: WARNING deleting runner %q (id %d) — not registered by this controller; a registration token has probably leaked",
+			r.Name, r.ID)
 		if err := a.do(ctx, http.MethodDelete, fmt.Sprintf("%s/%d", a.path, r.ID), nil); err != nil {
 			log.Printf("runner audit: delete runner %d: %v", r.ID, err)
 		}
 	}
+	log.Printf("runner audit: %s — %d runner(s): %d ours, %d foreign", a.path, len(list.Runners), mine, foreign)
 	return nil
 }
 

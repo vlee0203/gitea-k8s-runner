@@ -190,7 +190,23 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 	// controller did not register, so one cannot sit there harvesting jobs (and
 	// with them the repos' CI secrets).
 	if cfg.GiteaAPIToken != "" && cfg.RunnerAuditPath != "" {
-		a := audit.New(cfg.GiteaURL, cfg.RunnerAuditPath, cfg.GiteaAPIToken, store.UUIDs, cfg.AuditInterval)
+		// Identify our own runners by the name we register them under plus, if
+		// present, their persisted uuid.
+		known := func(ctx context.Context) (map[string]bool, error) {
+			names := make(map[string]bool)
+			for i := range cfg.Pools {
+				names[cfg.WorkerName+"-"+cfg.PoolStateKey(cfg.Pools[i])] = true
+			}
+			uuids, err := store.UUIDs(ctx)
+			if err != nil {
+				return nil, err
+			}
+			for u := range uuids {
+				names[u] = true
+			}
+			return names, nil
+		}
+		a := audit.New(cfg.GiteaURL, cfg.RunnerAuditPath, cfg.GiteaAPIToken, known, cfg.AuditInterval)
 		go a.Run(jobCtx)
 	}
 
