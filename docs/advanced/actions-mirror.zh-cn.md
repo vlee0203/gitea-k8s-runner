@@ -59,22 +59,25 @@ Gitea 侧留了半成品目录：删掉该仓库重来，或改走上面这条"�
 - 但**没人抢的名字，谁先注册谁的**。源码 `reservedUsernames` 只挡 Gitea 自己的路由名
   （`api`/`org`/`user`/`login`/…），没有 `RESERVED_USERNAMES` 这类配置项；用户名字符集
   `^[\da-zA-Z][-.\w]*$` **允许连字符** → 抢注连组织都不用建，注册个普通用户名 `aws-actions` 就行。
-- 本实例 `DISABLE_REGISTRATION = false`（还带 `ENABLE_CAPTCHA = false`、`REGISTER_EMAIL_CONFIRM = false`）、
-  `DEFAULT_ALLOW_CREATE_ORGANIZATION = true` → **任何人都能自助注册，并建组织**。
+- 本实例**原本**是 `DISABLE_REGISTRATION = false`（还带 `ENABLE_CAPTCHA = false`、`REGISTER_EMAIL_CONFIRM = false`）、
+  `DEFAULT_ALLOW_CREATE_ORGANIZATION = true` → 任何人都能自助注册、并建组织（这两个镜像组织就是这么
+  被一个**普通用户**建出来的）—— 已按下表收口。
 - 于是：别人写 `uses: aws-actions/configure-aws-credentials@v4`，被抢注后拉到的就是攻击者的代码，且是在
   **受害者自己的 job 里、拿着他的 token 与 secrets** 执行。
 
-**结论**：用 `self` 就等于把"名字解析"的权威交给自己实例。要收口，把下面这几条一起做：
+**结论**：抢注需要**新建账号或新建组织**，所以只要把这两条路堵上，`self` 就安全了 —— 不必为了安全
+把 action 来源改回 `github`（那是"上游新鲜度 vs 外网依赖"的取舍，不是安全项）。
 
-| 项 | 位置 | 作用 |
-| --- | --- | --- |
-| `DISABLE_REGISTRATION = true`（连带 `ENABLE_OPENID_SIGNUP`） | `[service]` / `[openid]` | 断掉"陌生人自助注册→抢注用户名"这条路 |
-| `DISABLE_REGULAR_ORG_CREATION = true` | `[admin]` | 非管理员一律不能建组织（源码 `CanCreateOrganization()`：`IsAdmin \|\| (AllowCreateOrganization && !DisableRegularOrgCreation)`） |
-| `DEFAULT_ACTIONS_URL` 改回 `github` | `[actions]` | **唯一根治**：名字解析回 github.com，实例上谁注册什么都不影响；代价是 action 要走外网 |
+| 项 | 位置 | 作用 | 本实例 |
+| --- | --- | --- | --- |
+| `DISABLE_REGISTRATION = true` | `[service]` | 断掉"陌生人自助注册→抢注用户名" | ✅ 已设（POST `/user/sign_up` → 403） |
+| `ENABLE_OPENID_SIGNUP = false` | `[openid]` | 内置 OpenID 注册是另一条口子 | ✅ 已设 |
+| `DISABLE_REGULAR_ORG_CREATION = true` | `[admin]` | 非管理员一律不能建组织（源码 `CanCreateOrganization()`：`IsAdmin \|\| (AllowCreateOrganization && !DisableRegularOrgCreation)`） | ✅ 已设（普通用户 `POST /api/v1/orgs` → 403） |
+| 组织 Owners 只留管理员 | 管理后台/`PUT /teams/{id}/members/{username}` | 谁改这些仓库 = 往所有引用它的 job 注入代码 | ✅ `actions`/`docker` 的 Owners 现在只有 `admin` |
 
-若必须不出外网（`self` 得留着），那前两条是必须项。另外：**这两个组织的所有者现在是普通用户**（见下），
-平台安全不该挂在一个普通账号的凭据上——把管理员加进 `actions`/`docker` 的 Owners 团队（或转移组织所有者），
-并保证**没有任何非管理员在 Owners 里**：谁改了这些仓库，等于往所有引用它的 job 里注入代码。
+若实例**能出网**，还有第三条路可选：把 `DEFAULT_ACTIONS_URL` 改回 `github`（`GITEA__actions__DEFAULT_ACTIONS_URL=github`），
+名字解析回 github.com，实例上谁注册了什么都不影响；代价是每个 job 都要去外网取 action。本实例保留 `self` +
+上面的收口，走的是"完全不吃外网"这条路。
 
 单个步骤想用别的来源时，`uses:` 支持绝对 URL（`uses: https://github.com/actions/setup-go@v5`）以及
 `self:` / `builtin:` / `$/` 前缀——见 Gitea 官方的 Compared to GitHub Actions。

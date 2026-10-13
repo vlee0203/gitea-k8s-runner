@@ -89,6 +89,24 @@ job Pod 要访问三类地址：**Gitea**（拉代码）、**controller 的 faca
 送去代理是这类环境里最常见的翻车方式。（kaniko 认 `HTTP_PROXY`/`HTTPS_PROXY`：实测把代理指到死端口，
 它会报 `proxyconnect … connection refused`。）
 
+### 用 `self` 就必须同时关掉开放注册与建组织
+
+`DEFAULT_ACTIONS_URL = self` 把 `uses: <owner>/<repo>@<ref>` 的解析权交给自己的实例，而**上游 owner 名在
+Gitea 侧没有任何保护**（源码 `reservedUsernames` 只挡 Gitea 自己的路由名；没有 `RESERVED_USERNAMES`
+配置项；用户名字符集 `^[\da-zA-Z][-.\w]*$` 允许连字符）。默认配置下任何人都能自助注册、并建组织，
+于是抢注 `aws-actions` / `hashicorp` / `github` 这类还没被占的名字，就能让写 `uses: aws-actions/…@v4`
+的 job 拉到攻击者的代码。**Gitea 侧必须一起设**：
+
+```
+GITEA__service__DISABLE_REGISTRATION=true          # 断掉陌生人注册
+GITEA__openid__ENABLE_OPENID_SIGNUP=false          # 内置 OpenID 注册是另一条口子
+GITEA__admin__DISABLE_REGULAR_ORG_CREATION=true    # 非管理员不能建组织
+```
+
+（`kubectl set env sts/<gitea> …` 即 env-to-ini，会重启一次 Gitea。组织名与用户名**同一命名空间**，
+所以已占的名字别人抢不走 —— 风险只在"没人占的名字"。）机制与取舍见
+[平台公共 action](../advanced/actions-mirror.zh-cn.md)。
+
 ## 部署后校验
 
 1. controller 日志应出现 `registered worker "<name>" for [<labels>]` 与
