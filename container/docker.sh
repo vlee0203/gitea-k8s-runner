@@ -62,7 +62,7 @@ parse_build() {
   [ -n "$GKR_FILE" ] || GKR_FILE="$GKR_CTX/Dockerfile"
   [ -z "$GKR_IGNORED" ] || log "忽略 kaniko 无对应物的参数：$GKR_IGNORED"
   case "$GKR_PLATFORM" in
-    *", "*) die "多平台构建（--platform=$GKR_PLATFORM）本平台做不到：kaniko 一次只能构建一个平台" ;;
+    *,*) die "多平台构建（--platform=$GKR_PLATFORM）本平台做不到：kaniko 一次只能构建一个平台（多平台需要 binfmt/QEMU 模拟，本集群安全基线不允许特权）" ;;
   esac
   printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$GKR_CTX" "$GKR_FILE" "$GKR_ARGS" "$GKR_TARGET" "$GKR_PLATFORM" "$GKR_TAGS" > "$SPEC"
 }
