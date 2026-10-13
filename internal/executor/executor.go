@@ -6,6 +6,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -174,6 +175,8 @@ cd /opt/gkr
 TOKEN=$(cat /etc/gkr/` + CapabilityKey + `)
 /opt/gkr/gitea-runner register --instance "$GITEA_INSTANCE_URL" --token "$TOKEN" \
   --name "$GITEA_RUNNER_NAME" --labels "$GITEA_RUNNER_LABELS" --ephemeral --no-interactive $CFG
+# docker 替身放进 PATH（injectRunner 池的镜像里没有它）
+[ -x /opt/gkr/docker ] && cp /opt/gkr/docker /usr/local/bin/docker 2>/dev/null || true
 exec /opt/gkr/gitea-runner daemon --once --labels "$GITEA_RUNNER_LABELS" $CFG
 `
 
@@ -181,6 +184,8 @@ exec /opt/gkr/gitea-runner daemon --once --labels "$GITEA_RUNNER_LABELS" $CFG
 // entrypoint above next to it.
 var injectRunnerScript = "cp /usr/local/bin/gitea-runner /opt/gkr/gitea-runner" +
 	" && chmod +x /opt/gkr/gitea-runner" +
+	// 顺带把 `docker` 替身也带过去：injectRunner 的池子主容器不是 runner 镜像，没有它
+	" && { cp /usr/local/bin/docker /opt/gkr/docker 2>/dev/null && chmod +x /opt/gkr/docker || true; }" +
 	" && cat > /opt/gkr/entrypoint.sh <<'GKR_ENTRYPOINT'\n" + injectedEntrypoint + "GKR_ENTRYPOINT\n" +
 	// The chmod must start its own line: a line cannot begin with "&&" after a
 	// heredoc, which is a shell syntax error (that failed the init container and
@@ -255,11 +260,15 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 	}
 
 	runner := corev1.Container{
-		Name:         runnerContainer,
-		Image:        s.Image,
-		Resources:    s.Resources,
-		Env:          env,
-		VolumeMounts: []corev1.VolumeMount{{Name: "capability", MountPath: "/etc/gkr", ReadOnly: true}},
+		Name:  runnerContainer,
+		Image: s.Image,
+		// 池镜像用的 tag 是可变的（例如 runner:ubuntu-latest），IfNotPresent 会让 Pod
+		// 一直用节点上缓存的旧镜像 —— 换镜像后行为不变会非常难查（实测踩过：新加的
+		// `docker` 替身没生效，Pod 里跑的还是真 docker）。
+		ImagePullPolicy: corev1.PullAlways,
+		Resources:       s.Resources,
+		Env:             env,
+		VolumeMounts:    []corev1.VolumeMount{{Name: "capability", MountPath: "/etc/gkr", ReadOnly: true}},
 	}
 	// 构建型 job：runner 与 kaniko 容器共享一个目录，构造请求/日志/退出码都走它。
 	if s.KanikoImage != "" {
@@ -292,10 +301,11 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		})
 		initContainers = []corev1.Container{{
-			Name:         "runner-binary",
-			Image:        s.RunnerImage,
-			Command:      []string{"sh", "-c", injectRunnerScript},
-			VolumeMounts: []corev1.VolumeMount{{Name: injectedRunnerVolume, MountPath: "/opt/gkr"}},
+			Name:            "runner-binary",
+			Image:           s.RunnerImage,
+			ImagePullPolicy: corev1.PullAlways,
+			Command:         []string{"sh", "-c", injectRunnerScript},
+			VolumeMounts:    []corev1.VolumeMount{{Name: injectedRunnerVolume, MountPath: "/opt/gkr"}},
 		}}
 	}
 	if s.KanikoImage != "" {
@@ -306,16 +316,18 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 		})
 		// 先把目录建好（HOME 要能被 runner 立刻写入），再让 kaniko 容器待命。
 		initContainers = append(initContainers, corev1.Container{
-			Name:         "shared-dir",
-			Image:        s.KanikoImage,
-			Command:      []string{"sh", "-c", "mkdir -p " + sharedDir + "/home " + sharedDir + "/req " + sharedDir + "/kaniko/.docker"},
-			VolumeMounts: []corev1.VolumeMount{shared},
+			Name:            "shared-dir",
+			Image:           s.KanikoImage,
+			ImagePullPolicy: corev1.PullAlways,
+			Command:         []string{"sh", "-c", "mkdir -p " + sharedDir + "/home " + sharedDir + "/req " + sharedDir + "/kaniko/.docker"},
+			VolumeMounts:    []corev1.VolumeMount{shared},
 		})
 		sidecar = &corev1.Container{
-			Name:         "kaniko",
-			Image:        s.KanikoImage,
-			Command:      []string{"sh", "-c", kanikoSidecarScript},
-			VolumeMounts: []corev1.VolumeMount{shared},
+			Name:            "kaniko",
+			Image:           s.KanikoImage,
+			ImagePullPolicy: corev1.PullAlways,
+			Command:         []string{"sh", "-c", kanikoSidecarScript},
+			VolumeMounts:    []corev1.VolumeMount{shared},
 		}
 	}
 
@@ -358,6 +370,16 @@ func (m *Manager) Phase(ctx context.Context, assignmentID string) (corev1.PodPha
 	// A build pod's kaniko container runs until the pod is deleted, so the pod
 	// phase would stay Running long after the job ended. Report the phase of the
 	// container that actually runs the job.
+	// A pod that cannot start at all — a bad image, an init container that fails,
+	// a missing binary — never reaches a terminal phase: kubelet keeps retrying,
+	// the pod sits in Pending, the slot stays taken and a rolling update waits on
+	// it forever. Report those as failed so the job is failed, the slot is freed
+	// and the deployment can proceed.
+	if why := stuckReason(pod); why != "" {
+		log.Printf("executor %s cannot start: %s", pod.Name, why)
+		return corev1.PodFailed, nil
+	}
+
 	for i := range pod.Status.ContainerStatuses {
 		cs := pod.Status.ContainerStatuses[i]
 		if cs.Name != runnerContainer {
@@ -372,6 +394,40 @@ func (m *Manager) Phase(ctx context.Context, assignmentID string) (corev1.PodPha
 		return corev1.PodRunning, nil
 	}
 	return pod.Status.Phase, nil
+}
+
+// stuckReason reports why a pod can never start, or "" if it may still make
+// progress. Only reasons that a retry cannot fix count: they mean the pod spec
+// or the image is wrong.
+func stuckReason(pod *corev1.Pod) string {
+	unfixable := map[string]bool{
+		"StartError":                 true, // 命令/入口不存在（例如镜像里没有 sh）
+		"CreateContainerConfigError": true, // 引用的 Secret/ConfigMap 缺失
+		"CreateContainerError":       true,
+		"InvalidImageName":           true,
+		"ErrImagePull":               true, // 镜像名/tag 错了；能拉到的会转成 ImagePullBackOff 再成功
+		"ImagePullBackOff":           true,
+	}
+	check := func(cs corev1.ContainerStatus) string {
+		if t := cs.State.Terminated; t != nil && t.ExitCode != 0 && t.Reason == "StartError" {
+			return "container " + cs.Name + " cannot start: " + t.Message
+		}
+		if w := cs.State.Waiting; w != nil && unfixable[w.Reason] {
+			return "container " + cs.Name + ": " + w.Reason + " " + w.Message
+		}
+		return ""
+	}
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if why := check(cs); why != "" {
+			return "init " + why
+		}
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if why := check(cs); why != "" {
+			return why
+		}
+	}
+	return ""
 }
 
 // List returns the assignment ids of executor pods this controller owns.

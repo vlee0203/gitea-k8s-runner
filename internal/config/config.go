@@ -100,7 +100,7 @@ func Load() (*Config, error) {
 		ImagePullSecret:         env("IMAGE_PULL_SECRET", ""),
 		CacheServerURL:          env("CACHE_SERVER_URL", ""),
 		RunnerImage:             env("RUNNER_IMAGE", ""),
-		KanikoImage:             env("KANIKO_IMAGE", "ghcr.io/osscontainertools/kaniko:v1.28.6"),
+		KanikoImage:             env("KANIKO_IMAGE", "ghcr.io/osscontainertools/kaniko:v1.28.6-debug"),
 		RegistrationTokenSecret: env("REGISTRATION_TOKEN_SECRET", ""),
 		ShutdownTimeout:         30 * time.Minute,
 	}
