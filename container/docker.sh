@@ -117,8 +117,14 @@ case "$cmd" in
     ref=${1:-}; [ -n "$ref" ] || die "push 需要镜像名：docker push <ref>"
     [ -f "$SPEC" ] || die "没有可推送的镜像：本平台没有本地镜像库，push 只能跟在同一个 job 里的 build 之后"
     { read -r GKR_CTX <&3; read -r GKR_FILE <&3; read -r GKR_ARGS <&3; read -r GKR_TARGET <&3; read -r GKR_PLATFORM <&3; } 3< "$SPEC" || true
-    log "push $ref：kaniko 没有本地镜像库，按上次 build 的参数重新构建并推送"
-    GKR_DEST=$ref run_kaniko
+    # kaniko 一次可推多个 destination：如果 ref 是上次 build 的某个 tag，就把那批 tag 一起推掉
+    # （`docker build -t a -t b .` + `docker push a` 是常见写法，不该为此构建两遍）。
+    case " ${GKR_TAGS:-} " in
+      *" $ref "*) GKR_DEST="$GKR_TAGS" ;;
+      *)          GKR_DEST="$GKR_TAGS $ref" ;;
+    esac
+    log "push $ref：kaniko 没有本地镜像库，按上次 build 的参数重新构建并推送（destination:$GKR_DEST）"
+    run_kaniko
     ;;
 
   tag)   log "tag 已忽略（构建时直接打目标 tag）" ;;
