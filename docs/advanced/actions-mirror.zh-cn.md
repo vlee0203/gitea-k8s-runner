@@ -48,9 +48,33 @@ weight: 44
 同类症状（迁移/推送 `unexpected disconnect`、`could not open '/var/lib/gitea/...'`）多半是仓库大或
 Gitea 侧留了半成品目录：删掉该仓库重来，或改走上面这条"裸克隆 + 推 ref"的路。
 
-## 注意
+## 注意：这是一条供应链，用之前先读
 
-- 这些仓库是**平台级公共基础设施**：谁改了它们，等于往所有引用它的 job 里注入代码。建议 `actions` /
-  `docker` 两个组织**只保留管理员**为成员。
-- 单个步骤想用别的来源时，`uses:` 支持绝对 URL（`uses: https://github.com/actions/setup-go@v5`）以及
-  `self:` / `builtin:` / `$/` 前缀——见 Gitea 官方的 Compared to GitHub Actions。
+`DEFAULT_ACTIONS_URL=self` 的代价不只是"要自己镜像"。`uses: <owner>/<repo>@<ref>` 会被解析到**本实例**
+（实测：未镜像的 action 报 `git clone --no-checkout https://<实例>/actions/setup-go`，不会回落 GitHub）。
+而上游的 owner 名在 Gitea 侧**没有任何保护**：
+
+- 组织名与用户名**同一个命名空间**（源码 `IsUserExist` 查同一张 `user` 表；实测 `GET /users/actions`
+  返回的就是那个组织，`type: Organization`）→ 所以**已占的名字别人抢不走**（`actions`/`docker` 是安全的）。
+- 但**没人抢的名字，谁先注册谁的**。源码 `reservedUsernames` 只挡 Gitea 自己的路由名
+  （`api`/`org`/`user`/`login`/…），没有 `RESERVED_USERNAMES` 这类配置项；用户名字符集
+  `^[\da-zA-Z][-.\w]*$` **允许连字符** → 抢注连组织都不用建，注册个普通用户名 `aws-actions` 就行。
+- 本实例 `DISABLE_REGISTRATION = false`（还带 `ENABLE_CAPTCHA = false`、`REGISTER_EMAIL_CONFIRM = false`）、
+  `DEFAULT_ALLOW_CREATE_ORGANIZATION = true` → **任何人都能自助注册，并建组织**。
+- 于是：别人写 `uses: aws-actions/configure-aws-credentials@v4`，被抢注后拉到的就是攻击者的代码，且是在
+  **受害者自己的 job 里、拿着他的 token 与 secrets** 执行。
+
+**结论**：用 `self` 就等于把"名字解析"的权威交给自己实例。要收口，把下面这几条一起做：
+
+| 项 | 位置 | 作用 |
+| --- | --- | --- |
+| `DISABLE_REGISTRATION = true`（连带 `ENABLE_OPENID_SIGNUP`） | `[service]` / `[openid]` | 断掉"陌生人自助注册→抢注用户名"这条路 |
+| `DISABLE_REGULAR_ORG_CREATION = true` | `[admin]` | 非管理员一律不能建组织（源码 `CanCreateOrganization()`：`IsAdmin \|\| (AllowCreateOrganization && !DisableRegularOrgCreation)`） |
+| `DEFAULT_ACTIONS_URL` 改回 `github` | `[actions]` | **唯一根治**：名字解析回 github.com，实例上谁注册什么都不影响；代价是 action 要走外网 |
+
+若必须不出外网（`self` 得留着），那前两条是必须项。另外：**这两个组织的所有者现在是普通用户**（见下），
+平台安全不该挂在一个普通账号的凭据上——把管理员加进 `actions`/`docker` 的 Owners 团队（或转移组织所有者），
+并保证**没有任何非管理员在 Owners 里**：谁改了这些仓库，等于往所有引用它的 job 里注入代码。
+
+单个步骤想用别的来源时，`uses:` 支持绝对 URL（`uses: https://github.com/actions/setup-go@v5`）以及
+`self:` / `builtin:` / `$/` 前缀——见 Gitea 官方的 Compared to GitHub Actions。
