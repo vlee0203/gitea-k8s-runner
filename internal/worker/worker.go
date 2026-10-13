@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -44,7 +45,13 @@ type Worker struct {
 	exec   *executor.Manager
 
 	version int64 // last tasks version seen from Gitea
+	running atomic.Int64
 }
+
+// Running reports how many jobs this worker currently has in flight. Callers
+// must not swap the worker's identity while this is non-zero: in-flight reports
+// are bound to the runner id that claimed them.
+func (w *Worker) Running() int64 { return w.running.Load() }
 
 // New wires a worker for one pool.
 func New(cfg *config.Config, pool config.Pool, client *giteaclient.Client, f *facade.Server, exec *executor.Manager) *Worker {
@@ -97,6 +104,8 @@ func (w *Worker) Run(pollCtx, jobCtx context.Context) {
 
 // run hands one claimed task to a fresh executor pod and waits for it to finish.
 func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
+	w.running.Add(1)
+	defer w.running.Add(-1)
 	repo, runID, job, workflow := taskContext(t)
 	id := strconv.FormatInt(t.Id, 10)
 

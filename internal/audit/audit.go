@@ -100,6 +100,12 @@ func (a *Auditor) Once(ctx context.Context) error {
 	return nil
 }
 
+// DeleteRunner removes one runner record by id, used when rotating an identity
+// so the credential it replaces stops working.
+func (a *Auditor) DeleteRunner(ctx context.Context, id int64) error {
+	return a.do(ctx, http.MethodDelete, fmt.Sprintf("%s/%d", a.path, id), nil)
+}
+
 func (a *Auditor) do(ctx context.Context, method, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, method, a.baseURL+path, nil)
 	if err != nil {

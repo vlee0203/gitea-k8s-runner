@@ -17,6 +17,12 @@ import (
 type Identity struct {
 	UUID  string `json:"uuid"`
 	Token string `json:"token"`
+	// RunnerID is the id Gitea assigned, kept so the runner record can be
+	// deleted when this identity is rotated.
+	RunnerID int64 `json:"runner_id,omitempty"`
+	// Registered is when this identity was created (unix seconds); rotation is
+	// due once it is older than the configured age.
+	Registered int64 `json:"registered,omitempty"`
 }
 
 const dataKey = "identities"

@@ -68,6 +68,15 @@ type Config struct {
 	GiteaAPIToken   string
 	RunnerAuditPath string
 	AuditInterval   time.Duration
+	// RegistrationTokenSecret names a k8s Secret (key "token") holding the
+	// registration token. When set, the controller reads it through the API
+	// instead of a mounted file, so no registration token is written to the pod
+	// filesystem and rotation needs no restart.
+	RegistrationTokenSecret string
+	// RotateAfter re-registers a worker identity older than this and deletes the
+	// runner it replaces, so a leaked runner credential stops working after at
+	// most this long. 0 disables rotation.
+	RotateAfter time.Duration
 	// ShutdownTimeout is how long in-flight jobs may drain before they are
 	// cancelled. Must not exceed the pod's terminationGracePeriodSeconds.
 	ShutdownTimeout time.Duration
@@ -85,20 +94,28 @@ func env(key, def string) string {
 // by POOLS_FILE.
 func Load() (*Config, error) {
 	c := &Config{
-		GiteaURL:              strings.TrimRight(env("GITEA_INSTANCE_URL", ""), "/"),
-		RegistrationTokenFile: env("REGISTRATION_TOKEN_FILE", "/etc/gitea-k8s-runner/registration-token"),
-		FacadeURL:             env("FACADE_URL", ""),
-		ListenAddr:            env("LISTEN_ADDR", ":8080"),
-		Scope:                 env("SCOPE", "namespace"),
-		TargetNamespace:       env("TARGET_NAMESPACE", ""),
-		WorkerName:            env("WORKER_NAME", "gitea-k8s-runner"),
-		StateSecretName:       env("STATE_SECRET_NAME", "gitea-k8s-runner-state"),
-		ImagePullSecret:       env("IMAGE_PULL_SECRET", ""),
-		CacheServerURL:        env("CACHE_SERVER_URL", ""),
-		RunnerImage:           env("RUNNER_IMAGE", ""),
-		RunnerAuditPath:       env("RUNNER_AUDIT_PATH", ""),
-		AuditInterval:         10 * time.Minute,
-		ShutdownTimeout:       30 * time.Minute,
+		GiteaURL:                strings.TrimRight(env("GITEA_INSTANCE_URL", ""), "/"),
+		RegistrationTokenFile:   env("REGISTRATION_TOKEN_FILE", "/etc/gitea-k8s-runner/registration-token"),
+		FacadeURL:               env("FACADE_URL", ""),
+		ListenAddr:              env("LISTEN_ADDR", ":8080"),
+		Scope:                   env("SCOPE", "namespace"),
+		TargetNamespace:         env("TARGET_NAMESPACE", ""),
+		WorkerName:              env("WORKER_NAME", "gitea-k8s-runner"),
+		StateSecretName:         env("STATE_SECRET_NAME", "gitea-k8s-runner-state"),
+		ImagePullSecret:         env("IMAGE_PULL_SECRET", ""),
+		CacheServerURL:          env("CACHE_SERVER_URL", ""),
+		RunnerImage:             env("RUNNER_IMAGE", ""),
+		RunnerAuditPath:         env("RUNNER_AUDIT_PATH", ""),
+		RegistrationTokenSecret: env("REGISTRATION_TOKEN_SECRET", ""),
+		AuditInterval:           10 * time.Minute,
+		ShutdownTimeout:         30 * time.Minute,
+	}
+	if v := env("ROTATE_AFTER", ""); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("ROTATE_AFTER: %w", err)
+		}
+		c.RotateAfter = d
 	}
 	if v := env("RUNNER_AUDIT_INTERVAL", ""); v != "" {
 		d, err := time.ParseDuration(v)

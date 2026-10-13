@@ -141,7 +141,22 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 		fatal("state secret %q is not writable: %v", cfg.StateSecretName, err)
 	}
 
+	// tokenFor returns a pool's registration token. When a Secret name is
+	// configured the token is read through the API, so it is never written to
+	// the pod filesystem; otherwise the pool's mounted file is used.
+	tokenFor := func(ctx context.Context, pool config.Pool) (string, error) {
+		if cfg.RegistrationTokenSecret == "" {
+			return readToken(cfg.PoolTokenFile(pool))
+		}
+		sec, err := cs.CoreV1().Secrets(sc.ExecutorNamespace()).Get(ctx, cfg.RegistrationTokenSecret, metav1.GetOptions{})
+		if err != nil {
+			return "", fmt.Errorf("read registration token secret %s: %w", cfg.RegistrationTokenSecret, err)
+		}
+		return strings.TrimSpace(string(sec.Data["token"])), nil
+	}
+
 	clients := make([]*giteaclient.Client, 0, len(cfg.Pools))
+	workers := make([]*worker.Worker, 0, len(cfg.Pools))
 	var wg sync.WaitGroup
 	for i := range cfg.Pools {
 		pool := cfg.Pools[i]
@@ -153,7 +168,7 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 			fatal("read worker state: %v", err)
 		}
 		if !ok {
-			token, err := readToken(cfg.PoolTokenFile(pool))
+			token, err := tokenFor(leaderCtx, pool)
 			if err != nil {
 				fatal("pool %v: %v", pool.Labels, err)
 			}
@@ -161,7 +176,7 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 			if err != nil {
 				fatal("register worker for %v: %v", pool.Labels, err)
 			}
-			id = state.Identity{UUID: r.Uuid, Token: r.Token}
+			id = state.Identity{UUID: r.Uuid, Token: r.Token, RunnerID: r.Id, Registered: time.Now().Unix()}
 			if err := store.Put(leaderCtx, key, id); err != nil {
 				fatal("persist worker state: %v", err)
 			}
@@ -174,6 +189,7 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 		clients = append(clients, cli)
 
 		w := worker.New(cfg, pool, cli, fac, exec)
+		workers = append(workers, w)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -189,6 +205,7 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 	// Contain a leaked registration token: delete runners in scope that this
 	// controller did not register, so one cannot sit there harvesting jobs (and
 	// with them the repos' CI secrets).
+	var auditor *audit.Auditor
 	if cfg.GiteaAPIToken != "" && cfg.RunnerAuditPath != "" {
 		// Identify our own runners by the name we register them under plus, if
 		// present, their persisted uuid.
@@ -206,8 +223,28 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 			}
 			return names, nil
 		}
-		a := audit.New(cfg.GiteaURL, cfg.RunnerAuditPath, cfg.GiteaAPIToken, known, cfg.AuditInterval)
-		go a.Run(jobCtx)
+		auditor = audit.New(cfg.GiteaURL, cfg.RunnerAuditPath, cfg.GiteaAPIToken, known, cfg.AuditInterval)
+		go auditor.Run(jobCtx)
+	}
+
+	// Rotation: re-register a worker identity older than ROTATE_AFTER and delete
+	// the runner it replaces, so a leaked runner credential stops working
+	// instead of being usable indefinitely.
+	if cfg.RotateAfter > 0 {
+		go func() {
+			t := time.NewTicker(cfg.AuditInterval)
+			defer t.Stop()
+			for {
+				select {
+				case <-t.C:
+					for i := range cfg.Pools {
+						rotateIfDue(jobCtx, cfg, store, clients[i], workers[i], cfg.Pools[i], tokenFor, auditor)
+					}
+				case <-jobCtx.Done():
+					return
+				}
+			}
+		}()
 	}
 
 	// An executor pod points its runner at this address (the facade), so the
@@ -259,6 +296,49 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 func fatal(format string, args ...any) {
 	log.Printf("fatal: "+format, args...)
 	os.Exit(1)
+}
+
+// runnerDeleter removes one runner record; *audit.Auditor implements it.
+type runnerDeleter interface {
+	DeleteRunner(ctx context.Context, id int64) error
+}
+
+// rotateIfDue re-registers a worker whose identity is older than ROTATE_AFTER
+// and deletes the runner it replaces. It never swaps the identity while a job is
+// in flight: in-flight reports are bound to the runner id that claimed them.
+func rotateIfDue(ctx context.Context, cfg *config.Config, store *state.Store, cli *giteaclient.Client,
+	w *worker.Worker, pool config.Pool, tokenFor func(context.Context, config.Pool) (string, error), del runnerDeleter) {
+	key := cfg.PoolStateKey(pool)
+	id, ok, err := store.Get(ctx, key)
+	if err != nil || !ok || id.Registered == 0 {
+		return
+	}
+	if time.Since(time.Unix(id.Registered, 0)) < cfg.RotateAfter || w.Running() > 0 {
+		return
+	}
+	token, err := tokenFor(ctx, pool)
+	if err != nil {
+		log.Printf("rotate %v: %v", pool.Labels, err)
+		return
+	}
+	r, err := cli.Register(ctx, cfg.WorkerName+"-"+key, token, pool.Labels, false)
+	if err != nil {
+		log.Printf("rotate %v: register: %v", pool.Labels, err)
+		return
+	}
+	cli.SetIdentity(r.Uuid, r.Token)
+	if err := cli.Declare(ctx, pool.Labels); err != nil {
+		log.Printf("rotate %v: declare: %v", pool.Labels, err)
+	}
+	if del != nil && id.RunnerID != 0 {
+		if err := del.DeleteRunner(ctx, id.RunnerID); err != nil {
+			log.Printf("rotate %v: delete superseded runner %d: %v", pool.Labels, id.RunnerID, err)
+		}
+	}
+	if err := store.Put(ctx, key, state.Identity{UUID: r.Uuid, Token: r.Token, RunnerID: r.Id, Registered: time.Now().Unix()}); err != nil {
+		log.Printf("rotate %v: persist: %v", pool.Labels, err)
+	}
+	log.Printf("rotated runner identity for pool %v (new runner %d supersedes %d)", pool.Labels, r.Id, id.RunnerID)
 }
 
 // readToken reads a registration token file, trimming the trailing newline.
