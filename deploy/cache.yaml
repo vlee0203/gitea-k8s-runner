@@ -2,7 +2,7 @@
 #
 # 每个 executor 都是全新 Pod，缓存默认是 Pod 本地的，跨 job 永不命中。跑一个常驻
 # cache-server（用同一个 runner 镜像的 cache-server 子命令），并把 controller 的
-# CACHE_SERVER_URL / CACHE_SERVER_SECRET_FILE 指向它，所有 job 就共用一份缓存。
+# CACHE_SERVER_URL / CACHE_SERVER_SECRET 指向它，所有 job 就共用一份缓存。
 apiVersion: v1
 kind: Secret
 metadata:
@@ -11,16 +11,6 @@ type: Opaque
 stringData:
   # openssl rand -hex 32
   secret: REPLACE_ME
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: gitea-runner-cache-config
-data:
-  # 值与上面的 Secret 同源：从环境读，避免两处维护。
-  config.yaml: |
-    cache:
-      external_secret: ${CACHE_SECRET}
 ---
 # 缓存要能被后续 job 命中，就必须跨 Pod 存活。
 apiVersion: v1
@@ -60,11 +50,15 @@ spec:
             requests: { cpu: 50m, memory: 100Mi }
             limits: { cpu: 500m, memory: 1Gi }
           image: ghcr.io/vlee0203/gitea-k8s-runner/runner:sha-d6b8141ca746a68e099796772bed340f298071d7
+          # cache-server 只从配置文件读密钥（没有 --secret 参数，实测），启动时用 env 生成一份
           command:
-            - /usr/local/bin/gitea-runner
-            - cache-server
+            - /bin/sh
+            - -c
+            - >-
+              printf 'cache:\n  external_secret: %s\n' "$CACHE_SECRET" > /tmp/cache-config.yaml &&
+              exec /usr/local/bin/gitea-runner cache-server
             - --config
-            - /etc/cache/config.yaml
+            - /tmp/cache-config.yaml
             - --dir
             - /cache
             - --host
@@ -79,12 +73,9 @@ spec:
             - { name: http, containerPort: 8088 }
           volumeMounts:
             - { name: cache, mountPath: /cache }
-            - { name: config, mountPath: /etc/cache, readOnly: true }
       volumes:
         - name: cache
           persistentVolumeClaim: { claimName: gitea-runner-cache }
-        - name: config
-          configMap: { name: gitea-runner-cache-config }
 ---
 apiVersion: v1
 kind: Service

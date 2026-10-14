@@ -100,17 +100,22 @@ func Load() (*Config, error) {
 		StateSecretName:         env("STATE_SECRET_NAME", "gitea-k8s-runner-state"),
 		ImagePullSecret:         env("IMAGE_PULL_SECRET", ""),
 		CacheServerURL:          env("CACHE_SERVER_URL", ""),
+		CacheServerSecret:       env("CACHE_SERVER_SECRET", ""),
 		RunnerImage:             env("RUNNER_IMAGE", ""),
 		KanikoImage:             env("KANIKO_IMAGE", "ghcr.io/osscontainertools/kaniko:v1.28.6-debug"),
 		RegistrationTokenSecret: env("REGISTRATION_TOKEN_SECRET", ""),
 		ShutdownTimeout:         30 * time.Minute,
 	}
-	if f := env("CACHE_SERVER_SECRET_FILE", ""); f != "" {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return nil, fmt.Errorf("read cache server secret %s: %w", f, err)
+	// CACHE_SERVER_SECRET carries the shared cache secret directly; the _FILE variant is the
+	// fallback for deployments that mount it instead of passing it through the environment.
+	if c.CacheServerSecret == "" {
+		if f := env("CACHE_SERVER_SECRET_FILE", ""); f != "" {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				return nil, fmt.Errorf("read cache server secret %s: %w", f, err)
+			}
+			c.CacheServerSecret = strings.TrimSpace(string(b))
 		}
-		c.CacheServerSecret = strings.TrimSpace(string(b))
 	}
 	if v := env("SHUTDOWN_TIMEOUT", ""); v != "" {
 		d, err := time.ParseDuration(v)

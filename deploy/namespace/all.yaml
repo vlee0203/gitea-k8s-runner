@@ -118,9 +118,10 @@ spec:
             - { name: POOLS_FILE, value: /etc/pools/pools.yaml }
             - { name: SHUTDOWN_TIMEOUT, value: 30m }
             # 共享缓存（deploy/cache.yaml）**才**会创建 Secret gitea-runner-cache；没应用它就别打开
-            # 下面两行 —— CACHE_SERVER_SECRET_FILE 读不到文件会让 controller 直接启动失败。
+            # 下面这两行。密钥直接用 env 传（值从那个 Secret 取），不需要挂文件。
             # - { name: CACHE_SERVER_URL, value: "http://gitea-runner-cache:8088/" }
-            # - { name: CACHE_SERVER_SECRET_FILE, value: /etc/cache/secret }
+            # - name: CACHE_SERVER_SECRET
+            #   valueFrom: { secretKeyRef: { name: gitea-runner-cache, key: secret } }
             # Gitea 用自签/企业 CA 时打开（另见文件末尾 gkr-ca 卷的注释）：
             # 只有 controller 需要信任它 —— 执行 Pod 全程只跟集群内的 facade 说 http。
             # - { name: SSL_CERT_FILE, value: /etc/gkr-ca/ca.crt }
@@ -140,7 +141,6 @@ spec:
           volumeMounts:
             - { name: pools, mountPath: /etc/pools, readOnly: true }
             - { name: kube-api-access, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true }
-            - { name: cache-secret, mountPath: /etc/cache, readOnly: true }
             # - { name: gkr-ca, mountPath: /etc/gkr-ca, readOnly: true }
       volumes:
         - name: pools
@@ -153,12 +153,6 @@ spec:
               - serviceAccountToken: { path: token, expirationSeconds: 3600 }
               - configMap: { name: kube-root-ca.crt, items: [{ key: ca.crt, path: ca.crt }] }
               - downwardAPI: { items: [{ path: namespace, fieldRef: { fieldPath: metadata.namespace } }] }
-        # cache-secret 的 Secret 由 deploy/cache.yaml 创建；optional 让它缺席时也不阻塞 Pod 启动
-        - name: cache-secret
-          secret:
-            secretName: gitea-runner-cache
-            optional: true
-            items: [{ key: secret, path: secret }]
         # Gitea 用自签/企业 CA 时打开这三个（连同上面的 SSL_CERT_FILE 与 volumeMount）。
         # CA 证书是公开材料，用 ConfigMap 而不是 Secret：
         #   kubectl -n <ns> create configmap gitea-ca --from-file=ca.crt=corp-ca.crt
