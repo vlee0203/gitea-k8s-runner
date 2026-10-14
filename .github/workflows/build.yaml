@@ -11,8 +11,8 @@ permissions:
   packages: write
 
 # 镜像标签规则（docker/metadata-action）：
-#   main 上         → sha-<完整 commit sha> + latest
-#   打 vX.Y.Z tag   → sha-<完整 commit sha> + vX.Y.Z
+#   main 上         → sha-<短 commit sha> + latest
+#   打 vX.Y.Z tag   → sha-<短 commit sha> + vX.Y.Z
 # sha- 前缀那个是**不可变**的：部署清单/Sealos 模板钉它（别钉 latest），
 # 换版本时改一处即可，内网 skopeo copy 也能连 tag 一起带走。
 #
@@ -38,7 +38,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}/controller
           tags: |
-            type=sha,format=long,prefix=sha-
+            type=sha,format=short,prefix=sha-
             type=ref,event=tag
             type=raw,value=latest,enable={{is_default_branch}}
       - uses: docker/build-push-action@v6
@@ -66,7 +66,7 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}/runner
           tags: |
-            type=sha,format=long,prefix=sha-
+            type=sha,format=short,prefix=sha-
             type=ref,event=tag
             type=raw,value=latest,enable={{is_default_branch}}
             # 老 tag，部署清单与池配置都在用，别去掉
