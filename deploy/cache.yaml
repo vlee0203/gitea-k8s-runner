@@ -8,12 +8,11 @@ kind: ConfigMap
 metadata:
   name: gitea-runner-cache-config
 data:
-  # 缓存密钥，只放这一处（openssl rand -hex 32）。两个消费方都把它挂成文件。
-  secret: REPLACE_ME
-  # 只放配置：写的是密钥文件的路径（external_secret_file 为上游支持字段，实测）
+  # 缓存的全部设置（含密钥）就这一份：cache-server 读它，controller 也读它取同一个密钥。
+  # 密钥换成 openssl rand -hex 32。
   config.yaml: |
     cache:
-      external_secret_file: /etc/cache/secret
+      external_secret: REPLACE_ME
 ---
 # 缓存要能被后续 job 命中，就必须跨 Pod 存活。
 apiVersion: v1
@@ -70,16 +69,11 @@ spec:
           volumeMounts:
             - { name: cache, mountPath: /cache }
             - { name: config, mountPath: /etc/cache, readOnly: true }
-            - { name: cache-secret, mountPath: /etc/cache/secret, subPath: secret, readOnly: true }
       volumes:
         - name: config
           configMap: { name: gitea-runner-cache-config }
         - name: cache
           persistentVolumeClaim: { claimName: gitea-runner-cache }
-        - name: cache-secret
-          configMap:
-            name: gitea-runner-cache-config
-            items: [{ key: secret, path: secret }]
 ---
 apiVersion: v1
 kind: Service
