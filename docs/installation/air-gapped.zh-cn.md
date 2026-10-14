@@ -132,6 +132,59 @@ kubectl -n <gitea-ns> set env sts/<gitea> \
 
 ### controller（必需）
 
+先明确**需要哪些证书**：客户端要能验通服务端证书的**签发链**，所以需要的是链上的 **中间证书 + 根 CA**；
+**服务端自己的那张（leaf）不需要**（由服务端在握手中给出）。若内网服务端下发的链不完整，把中间证书一并放进
+信任文件即可 —— 两份拼成一个 PEM 最省事：
+
+```bash
+cat middle.crt root-ca.crt > ca-bundle.crt          # 顺序无所谓，都是 PEM 块
+kubectl -n <应用命名空间> create secret generic gitea-ca --from-file=ca.crt=ca-bundle.crt
+```
+
+Secret 的形态（要手写就用这个框架，值自己填）：
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitea-ca
+  namespace: <应用命名空间>
+type: Opaque
+stringData:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    <中间证书 middle>
+    -----END CERTIFICATE-----
+    -----BEGIN CERTIFICATE-----
+    <根证书 ca>
+    -----END CERTIFICATE-----
+```
+
+然后在 controller 的 Deployment 上加**一处 env + 一个卷 + 一个挂载**（三处，缺一不可）：
+
+```yaml
+          env:
+            # Go 标准库同时扫这些目录；目录不存在也不影响公网证书（已实测正反对照）
+            - name: SSL_CERT_DIR
+              value: /etc/ssl/certs:/etc/gkr-ca
+          volumeMounts:
+            - { name: gitea-ca, mountPath: /etc/gkr-ca, readOnly: true }
+      volumes:
+        - name: gitea-ca
+          secret:
+            secretName: gitea-ca      # optional: true 时可先不建，改完再补
+            optional: true
+            items: [{ key: ca.crt, path: ca.crt }]
+```
+
+改完重启（`kubectl rollout restart deploy/gitea-k8s-runner`）。为什么只有 controller 需要：执行 Pod 全程只跟
+集群内的 facade 说明文 HTTP（见上一节）。
+
+> **双向 TLS（mTLS）另说**：如果 Gitea 要求客户端出示证书（而不只是你这边验服务端），当前 controller **不支持**
+> ——它只做服务端校验，没有配客户端证书/私钥的入口。那种情况要改代码，告诉我再加。
+
+
+
 把 CA 放进一个 ConfigMap（证书是公开材料，不必用 Secret），挂进 Deployment 并设 `SSL_CERT_FILE`（Go 标准库认这个变量）：
 
 ```bash
