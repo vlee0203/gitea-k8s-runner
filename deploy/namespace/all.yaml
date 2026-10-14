@@ -61,14 +61,14 @@ data:
   pools.yaml: |
     pools:
       - labels: [self-hosted, linux, x64, ubuntu-latest, ubuntu-24.04]
-        image: ghcr.io/vlee0203/gitea-k8s-runner/runner:sha-d08a1cf
+        image: ghcr.io/vlee0203/gitea-k8s-runner/runner:sha-db59656
         resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
         slots: 2
         timeout: 1h
       # 第二个池只是"更大规格 + 自带标签"，镜像与上一个相同：workflow 里的 docker 构建
       # 由平台自动附加的 kaniko 容器完成（见 KANIKO_IMAGE），不需要专用构建镜像。
       - labels: [self-hosted, build]
-        image: ghcr.io/vlee0203/gitea-k8s-runner/runner:sha-d08a1cf
+        image: ghcr.io/vlee0203/gitea-k8s-runner/runner:sha-db59656
         resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
         slots: 1
         timeout: 1h
@@ -99,7 +99,7 @@ spec:
       #   - name: registry-pull
       containers:
         - name: controller
-          image: ghcr.io/vlee0203/gitea-k8s-runner/controller:sha-d08a1cf
+          image: ghcr.io/vlee0203/gitea-k8s-runner/controller:sha-db59656
           imagePullPolicy: IfNotPresent
           resources:
             requests: { cpu: 50m, memory: 100Mi }
@@ -129,7 +129,7 @@ spec:
             # executor Pod 的 imagePullSecrets（上面那个 secret 的名字）；仓库可匿名拉取就留空。
             # - { name: IMAGE_PULL_SECRET, value: registry-pull }
             # injectRunner 的池从该镜像取 gitea-runner 二进制（静态 Go，busybox 下可跑）。
-            - { name: RUNNER_IMAGE, value: 'ghcr.io/vlee0203/gitea-k8s-runner/runner:sha-d08a1cf' }
+            - { name: RUNNER_IMAGE, value: 'ghcr.io/vlee0203/gitea-k8s-runner/runner:sha-db59656' }
             # 出网需要代理时：在 controller 上设这三个（平台会自动注入每个 executor Pod，
             # 并把 Gitea/facade/cache 等集群内地址追加进 NO_PROXY，另自动加 NODE_USE_ENV_PROXY=1）。
             #   - { name: HTTP_PROXY,  value: "http://proxy.example.com:3128" }

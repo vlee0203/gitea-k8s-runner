@@ -52,7 +52,7 @@ spec:
             requests: { cpu: 50m, memory: 100Mi }
             # ephemeralStorage 必须显式给：命名空间 LimitRange 默认 100Mi（usw 实测），不写就被注入
             limits: { cpu: 500m, memory: 1Gi, ephemeral-storage: 1Gi }
-          image: ghcr.io/vlee0203/gitea-k8s-runner/runner:sha-d08a1cf
+          image: ghcr.io/vlee0203/gitea-k8s-runner/runner:sha-db59656
           command:
             - /usr/local/bin/gitea-runner
             - cache-server
