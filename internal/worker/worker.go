@@ -230,9 +230,9 @@ func unsupportedWorkflowFeatures(payload []byte, jobKey string) []string {
 
 // needsImageBuild reports whether the job builds or pushes a container image,
 // either with the ordinary `docker build` / `docker push` / `docker login`, with
-// the official docker/* actions, or with kaniko directly. Those jobs have to run
-// in a container that can build (see the BuildImage field), so that a workflow
-// written for GitHub runs unchanged on runs-on: ubuntu-latest.
+// the official docker/* actions, or with kaniko directly. Those jobs get the kaniko
+// sidecar container (see Spec.KanikoImage), so that a workflow written for GitHub
+// runs unchanged on runs-on: ubuntu-latest.
 func needsImageBuild(payload []byte, jobKey string) bool {
 	if jobKey == "" {
 		return false
