@@ -102,8 +102,9 @@ spec:
           image: ghcr.io/vlee0203/gitea-k8s-runner/controller:sha-d52c20b
           imagePullPolicy: IfNotPresent
           resources:
-            requests: { cpu: 50m, memory: 100Mi }
-            # ephemeralStorage 必须显式给：命名空间 LimitRange 默认 100Mi（usw 实测），不写就被注入
+            # requests 与 limits 同值（这类短命工作负载不需要超卖）；ephemeralStorage 必须显式给，
+            # 否则会被命名空间 LimitRange 的默认值（usw 实测 100Mi）注入，写满即被驱逐
+            requests: { cpu: 50m, memory: 100Mi, ephemeral-storage: 1Gi }
             limits: { cpu: 500m, memory: 1Gi, ephemeral-storage: 1Gi }
           ports:
             - { name: http, containerPort: 8080 }
