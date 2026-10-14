@@ -8,10 +8,11 @@ kind: ConfigMap
 metadata:
   name: gitea-runner-cache-config
 data:
-  # 缓存的全部设置（含密钥）就这一份：cache-server 读它，controller 也读它取同一个密钥。
-  # 密钥换成 openssl rand -hex 32。
+  # cache-server 的全部参数都在这里（命令行上不带参数）。密钥换成 openssl rand -hex 32。
   config.yaml: |
     cache:
+      dir: /cache
+      port: 8088
       external_secret: REPLACE_ME
 ---
 # 缓存要能被后续 job 命中，就必须跨 Pod 存活。
@@ -58,12 +59,6 @@ spec:
             - cache-server
             - --config
             - /etc/cache/config.yaml
-            - --dir
-            - /cache
-            - --host
-            - 0.0.0.0
-            - --port
-            - "8088"
           ports:
             - { name: http, containerPort: 8088 }
           volumeMounts:
