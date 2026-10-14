@@ -44,15 +44,6 @@ type poolsFile struct {
 	Pools []Pool `yaml:"pools"`
 }
 
-// cacheConfig mirrors the parts of the cache server's own config file the controller needs:
-// it must know the same shared secret the cache-server does, and reading it from that one
-// file keeps a single source of truth instead of a second copy of the secret.
-type cacheConfig struct {
-	Cache struct {
-		ExternalSecret     string `json:"external_secret"`
-		ExternalSecretFile string `json:"external_secret_file"`
-	} `json:"cache"`
-}
 
 // Config is the resolved controller configuration.
 type Config struct {
@@ -115,27 +106,10 @@ func Load() (*Config, error) {
 		RegistrationTokenSecret: env("REGISTRATION_TOKEN_SECRET", ""),
 		ShutdownTimeout:         30 * time.Minute,
 	}
-	// The cache secret comes from the cache server's own config file (CACHE_SERVER_CONFIG_FILE):
-	// one ConfigMap is the single source of truth for the cache, and the cache-server reads the
-	// very same file. Both upstream spellings are accepted.
-	if f := env("CACHE_SERVER_CONFIG_FILE", ""); f != "" {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return nil, fmt.Errorf("read cache config %s: %w", f, err)
-		}
-		var cc cacheConfig
-		if err := yaml.Unmarshal(b, &cc); err != nil {
-			return nil, fmt.Errorf("parse cache config %s: %w", f, err)
-		}
-		c.CacheServerSecret = strings.TrimSpace(cc.Cache.ExternalSecret)
-		if c.CacheServerSecret == "" && cc.Cache.ExternalSecretFile != "" {
-			sb, err := os.ReadFile(cc.Cache.ExternalSecretFile)
-			if err != nil {
-				return nil, fmt.Errorf("read cache secret %s: %w", cc.Cache.ExternalSecretFile, err)
-			}
-			c.CacheServerSecret = strings.TrimSpace(string(sb))
-		}
-	}
+	// The shared cache secret, injected by the operator. The controller is a separate service
+	// from the cache-server, so it takes the value its own way — no dependency on how the
+	// cache-server's config file is written.
+	c.CacheServerSecret = env("CACHE_SERVER_SECRET", "")
 	if v := env("SHUTDOWN_TIMEOUT", ""); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
