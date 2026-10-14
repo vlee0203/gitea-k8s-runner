@@ -211,8 +211,9 @@ RUN update-ca-certificates
 - **执行 Pod 与 controller 同命名空间**：`SCOPE=namespace`，`TARGET_NAMESPACE` 用 fieldRef 取自己，
   这样只需要该命名空间的 RBAC，不需要集群级权限。
 - **服务名用模板变量**：`FACADE_URL` 要指向本应用自己的 Service（`http://<app_name>:8080`）。
-- **CA 走 ConfigMap 而不是 Secret**（证书是公开材料）：一个 `gitea-ca` ConfigMap + `SSL_CERT_FILE`
-  输入；**不要给这个 ConfigMap 名留空** —— `volumes[].configMap.name` 为空会被 API 拒绝。
+- **自定义 CA 不在模板里**（模板不替环境做决定）：自签证书时按需加一处 env + 一个卷 —— 具体加法在
+  实际部署时确定（挂载点 `/etc/gkr-ca` + `SSL_CERT_DIR=/etc/ssl/certs:/etc/gkr-ca`，已验证：CA 在则
+  自签证书被信任、CA 不在则公网证书照常可信）。
 - **执行 Pod 不需要 CA**（只跟集群内 facade 说 http），所以模板里只给 controller 装。
 - **镜像**：模板里钉不可变引用（`sha-<sha>` 标签或摘要），别钉 `latest`；内网填内网仓库地址。
 - **资源基线**：controller `limits 500m/1Gi`、`requests 50m/100Mi`，`revisionHistoryLimit: 1`，
