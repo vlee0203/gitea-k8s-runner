@@ -4,21 +4,13 @@
 # cache-server（用同一个 runner 镜像的 cache-server 子命令），并把 controller 的
 # CACHE_SERVER_URL / CACHE_SERVER_SECRET 指向它，所有 job 就共用一份缓存。
 apiVersion: v1
-kind: Secret
-metadata:
-  name: gitea-runner-cache
-type: Opaque
-stringData:
-  # openssl rand -hex 32
-  secret: REPLACE_ME
----
-apiVersion: v1
 kind: ConfigMap
 metadata:
   name: gitea-runner-cache-config
 data:
-  # 只放配置：写的是**密钥文件的路径**（值本身在挂载进来的 Secret 文件里，
-  # 不进配置、也不进任何 env）—— external_secret_file 为上游支持的字段（实测）。
+  # 缓存密钥，只放这一处（openssl rand -hex 32）。两个消费方都把它挂成文件。
+  secret: REPLACE_ME
+  # 只放配置：写的是密钥文件的路径（external_secret_file 为上游支持字段，实测）
   config.yaml: |
     cache:
       external_secret_file: /etc/cache/secret
@@ -85,8 +77,8 @@ spec:
         - name: cache
           persistentVolumeClaim: { claimName: gitea-runner-cache }
         - name: cache-secret
-          secret:
-            secretName: gitea-runner-cache
+          configMap:
+            name: gitea-runner-cache-config
             items: [{ key: secret, path: secret }]
 ---
 apiVersion: v1

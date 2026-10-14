@@ -118,9 +118,9 @@ spec:
             - { name: FACADE_URL, value: "http://gitea-k8s-runner:8080" }
             - { name: POOLS_FILE, value: /etc/pools/pools.yaml }
             - { name: SHUTDOWN_TIMEOUT, value: 30m }
-            # 共享缓存（deploy/cache.yaml）**才**会创建 Secret gitea-runner-cache；没应用它就别打开
-            # 下面这两行，同时也别打开文件末尾 cache-secret 的卷与挂载。
-            # env 里只给**路径**，密钥值本身来自挂载的 Secret 文件（external_secret_file 由上游支持，实测）。
+            # 共享缓存（deploy/cache.yaml）**才**会创建 ConfigMap gitea-runner-cache-config；
+            # 没应用它就别打开下面两行，同时也别打开文件末尾 cache-secret 的卷与挂载。
+            # env 里只给**路径**，密钥值在那边 ConfigMap 的 secret 键里。
             # - { name: CACHE_SERVER_URL, value: "http://gitea-runner-cache:8088/" }
             # - { name: CACHE_SERVER_SECRET_FILE, value: /etc/cache/secret }
             # Gitea 用自签/企业 CA 时打开（另见文件末尾 gkr-ca 卷的注释）：
@@ -148,10 +148,10 @@ spec:
       volumes:
         - name: pools
           configMap: { name: gitea-k8s-runner-pools }
-        # 用共享缓存时打开：密钥值只在这里出现
+        # 用共享缓存时打开（密钥值在那份 ConfigMap 的 secret 键里）
         # - name: cache-secret
-        #   secret:
-        #     secretName: gitea-runner-cache
+        #   configMap:
+        #     name: gitea-runner-cache-config
         #     items: [{ key: secret, path: secret }]
         # automountServiceAccountToken: false 本该提供的那份（token + CA + namespace）
         - name: kube-api-access
