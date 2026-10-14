@@ -3,9 +3,7 @@ name: build
 on:
   push:
     branches: [main]
-    # 只有这些路径变了才重建镜像 —— 改文档、改模板不会触发构建。
-    # 注意：一旦写了 paths，连 tag push 也会被它过滤，所以将来的 v* 版本标签
-    # 需要用单独一个不带 paths 的 workflow 来构建。
+    # 只有会影响镜像内容的路径变了才重建 —— 改文档、改模板不触发构建。
     paths:
       - 'container/**'
       - 'cmd/**'
@@ -13,6 +11,8 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/build.yaml'
+  # v* 版本标签由 release.yaml 触发（那边不带 paths 过滤），复用本文件的构建逻辑
+  workflow_call:
   workflow_dispatch:
 
 permissions:

@@ -1,0 +1,17 @@
+name: release
+
+# 打 v* 版本标签时构建发布镜像。
+# 单独一个文件的原因：build.yaml 的 push 触发器带 paths 过滤，而 paths 会连 tag push 一起过滤掉，
+# 会让版本标签静默不构建。这里复用 build.yaml 的构建逻辑（workflow_call），没有重复的构建步骤。
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yaml
+    secrets: inherit
