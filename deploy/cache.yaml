@@ -58,7 +58,8 @@ spec:
           imagePullPolicy: IfNotPresent
           resources:
             requests: { cpu: 50m, memory: 100Mi }
-            limits: { cpu: 500m, memory: 1Gi }
+            # ephemeralStorage 必须显式给：命名空间 LimitRange 默认 100Mi（usw 实测），不写就被注入
+            limits: { cpu: 500m, memory: 1Gi, ephemeral-storage: 1Gi }
           image: ghcr.io/vlee0203/gitea-k8s-runner/runner:sha-3c6a11aead31444fb632d74fd347b566b56fd163
           command:
             - /usr/local/bin/gitea-runner

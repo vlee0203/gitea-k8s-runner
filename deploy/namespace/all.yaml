@@ -103,7 +103,8 @@ spec:
           imagePullPolicy: IfNotPresent
           resources:
             requests: { cpu: 50m, memory: 100Mi }
-            limits: { cpu: 500m, memory: 1Gi }
+            # ephemeralStorage 必须显式给：命名空间 LimitRange 默认 100Mi（usw 实测），不写就被注入
+            limits: { cpu: 500m, memory: 1Gi, ephemeral-storage: 1Gi }
           ports:
             - { name: http, containerPort: 8080 }
           env:
