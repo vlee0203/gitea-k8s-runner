@@ -12,6 +12,16 @@ stringData:
   # openssl rand -hex 32
   secret: REPLACE_ME
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gitea-runner-cache-config
+data:
+  # 只放配置；密钥由下面的 CACHE_SECRET 环境变量注入（${CACHE_SECRET} 由 cache-server 展开）
+  config.yaml: |
+    cache:
+      external_secret: ${CACHE_SECRET}
+---
 # 缓存要能被后续 job 命中，就必须跨 Pod 存活。
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -50,15 +60,11 @@ spec:
             requests: { cpu: 50m, memory: 100Mi }
             limits: { cpu: 500m, memory: 1Gi }
           image: ghcr.io/vlee0203/gitea-k8s-runner/runner:sha-3c6a11aead31444fb632d74fd347b566b56fd163
-          # cache-server 只从配置文件读密钥（没有 --secret 参数，实测），启动时用 env 生成一份
           command:
-            - /bin/sh
-            - -c
-            - >-
-              printf 'cache:\n  external_secret: %s\n' "$CACHE_SECRET" > /tmp/cache-config.yaml &&
-              exec /usr/local/bin/gitea-runner cache-server
+            - /usr/local/bin/gitea-runner
+            - cache-server
             - --config
-            - /tmp/cache-config.yaml
+            - /etc/cache/config.yaml
             - --dir
             - /cache
             - --host
@@ -73,7 +79,10 @@ spec:
             - { name: http, containerPort: 8088 }
           volumeMounts:
             - { name: cache, mountPath: /cache }
+            - { name: config, mountPath: /etc/cache, readOnly: true }
       volumes:
+        - name: config
+          configMap: { name: gitea-runner-cache-config }
         - name: cache
           persistentVolumeClaim: { claimName: gitea-runner-cache }
 ---
