@@ -43,7 +43,7 @@ done
 ```
 
 - `--all` 搬多架构；内网是 amd64 单架构也可以用 `--override-arch amd64` 少搬一半。
-- 想钉住版本就用 workflow 产出的**不可变标签** `sha-<完整 commit sha>`（见
+- 想钉住版本就用 workflow 产出的**不可变标签** `sha-<短 commit sha>`（见
   [开发文档](../advanced/development.zh-cn.md)）：`.../controller:sha-abc123…`，比 `latest` 可复现，
   内网 `skopeo copy` 也会连 tag 一起带过去。
 - kaniko 的源在 `ghcr.io/osscontainertools/`，前两个在 `ghcr.io/vlee0203/` —— 上面的循环统一落到

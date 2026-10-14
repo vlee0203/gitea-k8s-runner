@@ -44,11 +44,11 @@ GOWORK=off go vet ./...
 
 | 镜像 | 来源 | 标签 |
 | --- | --- | --- |
-| `ghcr.io/vlee0203/gitea-k8s-runner/controller` | `container/controller.Dockerfile` | `sha-<完整 commit sha>`、`latest`（main 上）；打 `vX.Y.Z` tag 时另有 `vX.Y.Z` |
+| `ghcr.io/vlee0203/gitea-k8s-runner/controller` | `container/controller.Dockerfile` | `sha-<短 commit sha>`、`latest`（main 上）；打 `vX.Y.Z` tag 时另有 `vX.Y.Z` |
 | `ghcr.io/vlee0203/gitea-k8s-runner/runner` | `container/runner.Dockerfile` | 同上，另有历史沿用的 `ubuntu-latest` |
 
-**部署清单钉的是摘要**（`@sha256:…`，不可变），不要钉 `latest` / `ubuntu-latest` —— 那些会被下一次构建覆盖；
-标签里 `sha-<完整 sha>` 也是不可变的，想用可读一点的写法就换成它。
+**部署清单钉的是摘要**（不可变的 `sha-<短 commit sha>` 标签），不要钉 `latest` / `ubuntu-latest` —— 那些会被下一次构建覆盖；
+标签里 `sha-<短 sha>` 也是不可变的，想用可读一点的写法就换成它。
 
 多架构不额外花钱：构建阶段用 `--platform=$BUILDPLATFORM` 在 builder 上交叉编译（Go 目标架构来自
 `TARGETOS/TARGETARCH`），不需要 QEMU 跑编译；两个基础镜像（`golang` / `distroless`、以及 runner 的
