@@ -119,10 +119,10 @@ spec:
             - { name: POOLS_FILE, value: /etc/pools/pools.yaml }
             - { name: SHUTDOWN_TIMEOUT, value: 30m }
             # 共享缓存（deploy/cache.yaml）**才**会创建 Secret gitea-runner-cache；没应用它就别打开
-            # 下面这两行。密钥直接用 env 传（值从那个 Secret 取），不需要挂文件。
+            # 下面这两行，同时也别打开文件末尾 cache-secret 的卷与挂载。
+            # env 里只给**路径**，密钥值本身来自挂载的 Secret 文件（external_secret_file 由上游支持，实测）。
             # - { name: CACHE_SERVER_URL, value: "http://gitea-runner-cache:8088/" }
-            # - name: CACHE_SERVER_SECRET
-            #   valueFrom: { secretKeyRef: { name: gitea-runner-cache, key: secret } }
+            # - { name: CACHE_SERVER_SECRET_FILE, value: /etc/cache/secret }
             # Gitea 用自签/企业 CA 时打开（另见文件末尾 gkr-ca 卷的注释）：
             # 只有 controller 需要信任它 —— 执行 Pod 全程只跟集群内的 facade 说 http。
             # - { name: SSL_CERT_FILE, value: /etc/gkr-ca/ca.crt }
@@ -141,11 +141,18 @@ spec:
             - { name: KANIKO_IMAGE, value: ghcr.io/osscontainertools/kaniko:v1.28.6-debug }
           volumeMounts:
             - { name: pools, mountPath: /etc/pools, readOnly: true }
+            # 用共享缓存时打开（与上面的 env 两行一起）
+            # - { name: cache-secret, mountPath: /etc/cache/secret, subPath: secret, readOnly: true }
             - { name: kube-api-access, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true }
             # - { name: gkr-ca, mountPath: /etc/gkr-ca, readOnly: true }
       volumes:
         - name: pools
           configMap: { name: gitea-k8s-runner-pools }
+        # 用共享缓存时打开：密钥值只在这里出现
+        # - name: cache-secret
+        #   secret:
+        #     secretName: gitea-runner-cache
+        #     items: [{ key: secret, path: secret }]
         # automountServiceAccountToken: false 本该提供的那份（token + CA + namespace）
         - name: kube-api-access
           projected:
