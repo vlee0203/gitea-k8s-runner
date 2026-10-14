@@ -39,7 +39,7 @@ GOWORK=off go vet ./...
 
 ## 镜像与 CI
 
-`.github/workflows/build.yaml`（push 到 main / 打 `v*` tag / 手动触发）构建并推送两个镜像，**每个都是
+`.github/workflows/build.yaml`（push 到 main、且只在这些路径变化时触发：`container/` `cmd/` `internal/` `go.mod` `go.sum` 与 workflow 自身；也可手动触发）构建并推送两个镜像，**每个都是
 `linux/amd64` + `linux/arm64` 双架构**：
 
 | 镜像 | 来源 | 标签 |
@@ -47,7 +47,7 @@ GOWORK=off go vet ./...
 | `ghcr.io/vlee0203/gitea-k8s-runner/controller` | `container/controller.Dockerfile` | `sha-<短 commit sha>`、`latest`（main 上）；打 `vX.Y.Z` tag 时另有 `vX.Y.Z` |
 | `ghcr.io/vlee0203/gitea-k8s-runner/runner` | `container/runner.Dockerfile` | 同上，另有历史沿用的 `ubuntu-latest` |
 
-**部署清单钉的是摘要**（不可变的 `sha-<短 commit sha>` 标签），不要钉 `latest` / `ubuntu-latest` —— 那些会被下一次构建覆盖；
+**部署清单钉的是不可变的 `sha-<短 commit sha>` 标签**，不要钉 `latest` / `ubuntu-latest` —— 那些会被下一次构建覆盖；
 标签里 `sha-<短 sha>` 也是不可变的，想用可读一点的写法就换成它。
 
 多架构不额外花钱：构建阶段用 `--platform=$BUILDPLATFORM` 在 builder 上交叉编译（Go 目标架构来自
