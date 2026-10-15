@@ -97,8 +97,31 @@ func (w *Worker) CancelSilentJobs(ctx context.Context, silence time.Duration) in
 // Adopt tracks a job started by a predecessor so the drain can wait for it (and
 // cut it loose if it goes quiet). The assignment itself needs no registration: any
 // instance resolves it from its Secret.
+//
+// It also counts the job as running and watches its pod: without that the drain's
+// "nothing left to wait for" signal ignores adopted jobs, and an instance whose
+// only work is adopted exits at once — never reaching the silence cutoff. That is
+// exactly how a wedged adopted job survived a rollout (measured on usw).
 func (w *Worker) Adopt(id, capability string) {
 	w.trackInFlight(id, nil, capability)
+	w.running.Add(1)
+	go w.watchAdopted(id)
+}
+
+// watchAdopted follows a pod this instance did not start, until it ends.
+func (w *Worker) watchAdopted(id string) {
+	defer w.running.Add(-1)
+	defer w.untrackInFlight(id)
+	tick := time.NewTicker(podWatchInterval)
+	defer tick.Stop()
+	for range tick.C {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		phase, err := w.exec.Phase(ctx, id)
+		cancel()
+		if err != nil || phase == "" || phase == corev1.PodSucceeded || phase == corev1.PodFailed {
+			return
+		}
+	}
 }
 
 func (w *Worker) deletePod(id string) {

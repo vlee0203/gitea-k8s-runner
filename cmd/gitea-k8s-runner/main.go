@@ -264,8 +264,16 @@ drain:
 			log.Printf("all in-flight jobs finished")
 			break drain
 		case <-sweep.C:
+			// 等待条件必须包含"接管的 job"：它们不产生 worker goroutine，只看 wg 会在
+			// 只有接管 job 时立刻判定 drain 结束（实测踩过：这样一个 job 一直留到实例退出）。
+			remaining := int64(0)
 			for _, w := range workers {
 				w.CancelSilentJobs(leaderCtx, cfg.DrainSilence)
+				remaining += w.Running()
+			}
+			if remaining == 0 {
+				log.Printf("all in-flight jobs finished")
+				break drain
 			}
 		case <-deadline:
 			log.Printf("drain timed out: cancelling in-flight jobs")
