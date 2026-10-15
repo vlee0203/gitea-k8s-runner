@@ -123,8 +123,8 @@ kubectl -n <gitea-ns> set env sts/<gitea> \
 | --- | --- | --- |
 | **controller** | **Gitea（https）**：注册 runner、facade 反向代理到真实 Gitea | **要** |
 | 执行 Pod 里的 runner / `actions/checkout` | 集群内的 **facade（明文 http）** | 不要 |
-| kaniko 旁路容器 | 构建上下文是**本地目录**（`dir://`），不连 Gitea；**但**workflow 若往自签的 Gitea registry 推镜像，它就要 | 推镜像时才要 |
-| workflow 里直接访问 Gitea API 的步骤 | Gitea（https） | 要（得用带 CA 的执行环境镜像） |
+| kaniko 旁路容器 | 构建上下文是**本地目录**（`dir://`），不连 Gitea；**但**workflow 若往自签的 Gitea registry 推镜像，它就要 | 推镜像时才要（由 `EXECUTOR_CA_SECRET` 注入 CA 解决，不必烧镜像）|
+| workflow 里直接访问 Gitea API 的步骤 | Gitea（https） | 要（同上，`EXECUTOR_CA_SECRET` 注入即覆盖） |
 
 依据：执行 Pod 里的 `CONTROLLER_URL` 指向 **controller 自己**（`internal/executor/executor.go` 里
 `{Name: "CONTROLLER_URL", Value: s.ControllerURL}`，就是集群内的明文 Service），所以 Pod 侧取代码不走

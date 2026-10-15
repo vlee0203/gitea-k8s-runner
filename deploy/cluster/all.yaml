@@ -144,6 +144,12 @@ spec:
             # 用 SSL_CERT_DIR 而不是 SSL_CERT_FILE：两者都是"替换"语义，只给自定义 CA 会把系统根证书顶掉；
             # 把 /etc/ssl/certs 一并列上，自定义 CA 与公网根证书才同时可用（实测过）。
             # - { name: SSL_CERT_DIR, value: "/etc/ssl/certs:/etc/gkr-ca" }
+            # 执行 Pod 也要信任自签 Gitea 时：把 CA 放进 Secret（key ca.crt），再把它的名字
+            # 填在这里。controller 会把 CA 与镜像自带的根证书拼成一个 bundle，注入每个执行 Pod
+            # （runner 与 kaniko 两个容器），各工具链（Go/curl/git/Node/python）都指到它 ——
+            # 这样 workflow 往自签 registry 推镜像、从自签 Gitea 取 action 都不用重烧镜像。
+            #   kubectl -n <ns> create secret generic gitea-ca --from-file=ca.crt=corp-ca.crt
+            # - { name: EXECUTOR_CA_SECRET, value: gitea-ca }
             # executor Pod 的 imagePullSecrets（上面那个 secret 的名字）；仓库可匿名拉取就留空。
             # - { name: IMAGE_PULL_SECRET, value: registry-pull }
             # injectRunner 的池从该镜像取 gitea-runner 二进制（静态 Go，busybox 下可跑）。

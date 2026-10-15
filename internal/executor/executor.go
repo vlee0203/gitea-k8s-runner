@@ -48,6 +48,52 @@ const (
 	CapabilityHashLabel = "gitea-k8s-runner/capability-hash"
 )
 
+// CA bundle plumbing for executor pods.
+const (
+	// caBundleDir is where the combined bundle lands, in every container.
+	caBundleDir  = "/etc/gkr-ca"
+	caBundleFile = caBundleDir + "/ca-certificates.crt"
+	caSecretVol  = "gkr-ca-source"
+	caBundleVol  = "gkr-ca-bundle"
+)
+
+// injectCA makes a pod trust a CA (e.g. an intranet Gitea with a self-signed
+// certificate) without baking it into any image: an init container concatenates
+// the image's own roots with the CA, and every container reads that bundle through
+// the variable each toolchain actually honours — Go (kaniko), OpenSSL/curl/git,
+// Node (JS actions) and Python all differ here.
+func injectCA(ps *corev1.PodSpec, secretName, image string) {
+	ps.Volumes = append(ps.Volumes,
+		corev1.Volume{Name: caSecretVol, VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{SecretName: secretName,
+				Items: []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}}}}},
+		corev1.Volume{Name: caBundleVol, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+	)
+	ps.InitContainers = append(ps.InitContainers, corev1.Container{
+		Name: "ca-bundle", Image: image, ImagePullPolicy: corev1.PullIfNotPresent,
+		Command: []string{"sh", "-c",
+			"cat /etc/ssl/certs/ca-certificates.crt /gkr-ca-source/ca.crt > /gkr-ca-bundle/ca-certificates.crt 2>/dev/null" +
+				" || cp /gkr-ca-source/ca.crt /gkr-ca-bundle/ca-certificates.crt"},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: caSecretVol, MountPath: "/gkr-ca-source", ReadOnly: true},
+			{Name: caBundleVol, MountPath: "/gkr-ca-bundle"},
+		},
+	})
+	env := []corev1.EnvVar{
+		{Name: "SSL_CERT_FILE", Value: caBundleFile},       // Go(kaniko)/OpenSSL
+		{Name: "SSL_CERT_DIR", Value: "/etc/ssl/certs"},    // 双保险：系统目录仍被扫描
+		{Name: "CURL_CA_BUNDLE", Value: caBundleFile},      // curl / git
+		{Name: "GIT_SSL_CAINFO", Value: caBundleFile},      // git 显式指定
+		{Name: "NODE_EXTRA_CA_CERTS", Value: caBundleFile}, // Node（JS action 的 fetch）
+		{Name: "REQUESTS_CA_BUNDLE", Value: caBundleFile},  // python requests
+	}
+	for i := range ps.Containers {
+		ps.Containers[i].VolumeMounts = append(ps.Containers[i].VolumeMounts,
+			corev1.VolumeMount{Name: caBundleVol, MountPath: caBundleDir, ReadOnly: true})
+		ps.Containers[i].Env = append(ps.Containers[i].Env, env...)
+	}
+}
+
 // CapabilityHash is the label value that lets any instance find the assignment
 // Secret from the capability alone. One-way: the capability stays the credential.
 func CapabilityHash(capability string) string {
@@ -80,8 +126,14 @@ type Spec struct {
 	// Task and PoolKey are persisted into the assignment Secret so that any
 	// controller instance can serve this job, and so a successor can adopt it.
 	// PoolKey says whose runner identity reports it back to Gitea.
-	Task      *runnerv1.Task
-	PoolKey   string
+	Task    *runnerv1.Task
+	PoolKey string
+	// CASecret, when set, names a Secret (key "ca.crt") whose CA the pod must trust.
+	// The controller reads it and points every container at a bundle of that CA plus
+	// the image's own roots (see injectCA), so jobs can reach a self-signed Gitea —
+	// pushing images to its registry, fetching actions from it — without baking a CA
+	// into any image.
+	CASecret  string
 	Resources corev1.ResourceRequirements
 	// ImagePullSecret, when set, is used to pull the executor image.
 	ImagePullSecret string
@@ -425,6 +477,19 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 			Containers:            append([]corev1.Container{runner}, sidecarContainers(sidecar)...),
 			Volumes:               volumes,
 		},
+	}
+	if s.CASecret != "" {
+		caImage := s.RunnerImage
+		if caImage == "" {
+			caImage = s.Image
+		}
+		if sec, err := m.cs.CoreV1().Secrets(m.namespace).Get(ctx, s.CASecret, metav1.GetOptions{}); err != nil {
+			log.Printf("executor: read CA secret %s: %v（这个 job 的 Pod 不会信任自签 Gitea）", s.CASecret, err)
+		} else if pem := sec.Data["ca.crt"]; len(pem) == 0 {
+			log.Printf("executor: CA secret %s has no ca.crt（这个 job 的 Pod 不会信任自签 Gitea）", s.CASecret)
+		} else {
+			injectCA(&pod.Spec, s.CASecret, caImage)
+		}
 	}
 	if _, err := m.cs.CoreV1().Pods(m.namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create executor pod: %w", err)
