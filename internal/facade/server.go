@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect"
 	pingv1 "gitea.dev/actionslib/ping/v1"
@@ -37,11 +38,29 @@ type Assignment struct {
 	finishOn sync.Once
 	mu       sync.Mutex
 	served   bool
+	// lastSeen is when the executor pod last talked to this facade. A draining
+	// instance uses it to tell a job that is still working from one that is wedged
+	// (see Worker.CancelSilentJobs).
+	lastSeen time.Time
 }
 
 // NewAssignment builds an assignment with a fresh Done channel.
 func NewAssignment(task *runnerv1.Task, capability string, up Upstream) *Assignment {
-	return &Assignment{Task: task, Capability: capability, Upstream: up, done: make(chan struct{})}
+	return &Assignment{Task: task, Capability: capability, Upstream: up, done: make(chan struct{}), lastSeen: time.Now()}
+}
+
+// Touch records executor activity.
+func (a *Assignment) Touch() {
+	a.mu.Lock()
+	a.lastSeen = time.Now()
+	a.mu.Unlock()
+}
+
+// IdleFor reports how long the executor has been quiet.
+func (a *Assignment) IdleFor() time.Duration {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return time.Since(a.lastSeen)
 }
 
 // Done is closed once the task reaches a terminal state.
@@ -101,6 +120,7 @@ func (s *Server) Register(_ context.Context, req *connect.Request[runnerv1.Regis
 	if a == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errUnknownCapability)
 	}
+	a.Touch()
 	return connect.NewResponse(&runnerv1.RegisterResponse{Runner: &runnerv1.Runner{
 		Uuid: a.Capability, Token: a.Capability, Name: req.Msg.Name, Ephemeral: true,
 	}}), nil
@@ -112,6 +132,7 @@ func (s *Server) Declare(_ context.Context, req *connect.Request[runnerv1.Declar
 	if a == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errUnknownCapability)
 	}
+	a.Touch() // 执行 Pod 说话 = 这个 job 还活着（drain 判卡死用）
 	return connect.NewResponse(&runnerv1.DeclareResponse{Runner: &runnerv1.Runner{
 		Uuid: a.Capability, Token: a.Capability, Ephemeral: true,
 	}}), nil
@@ -123,6 +144,7 @@ func (s *Server) FetchTask(_ context.Context, req *connect.Request[runnerv1.Fetc
 	if a == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errUnknownCapability)
 	}
+	a.Touch() // 执行 Pod 说话 = 这个 job 还活着（drain 判卡死用）
 	return connect.NewResponse(&runnerv1.FetchTaskResponse{Task: a.take(), TasksVersion: req.Msg.TasksVersion}), nil
 }
 
@@ -132,6 +154,7 @@ func (s *Server) UpdateTask(ctx context.Context, req *connect.Request[runnerv1.U
 	if a == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errUnknownCapability)
 	}
+	a.Touch() // 执行 Pod 说话 = 这个 job 还活着（drain 判卡死用）
 	state, err := a.Upstream.UpdateTask(ctx, req.Msg.State, req.Msg.Outputs)
 	if err != nil {
 		return nil, err
@@ -148,6 +171,7 @@ func (s *Server) UpdateLog(ctx context.Context, req *connect.Request[runnerv1.Up
 	if a == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, errUnknownCapability)
 	}
+	a.Touch() // 执行 Pod 说话 = 这个 job 还活着（drain 判卡死用）
 	ack, err := a.Upstream.UpdateLog(ctx, req.Msg.TaskId, req.Msg.Index, req.Msg.Rows, req.Msg.NoMore)
 	if err != nil {
 		return nil, err

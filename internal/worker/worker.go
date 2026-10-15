@@ -46,6 +46,19 @@ type Worker struct {
 
 	version int64 // last tasks version seen from Gitea
 	running atomic.Int64
+
+	// inFlight lets a draining instance give up on jobs that stopped talking.
+	// A pod that is wedged still holds a slot and keeps the drain (and therefore
+	// the whole rollout) waiting until SHUTDOWN_TIMEOUT; CancelSilentJobs cuts
+	// those loose instead of blocking a release for the full timeout.
+	inFlightMu sync.Mutex
+	inFlight   map[string]inFlightJob
+}
+
+// inFlightJob is one running job's cancel handle and the assignment it reports to.
+type inFlightJob struct {
+	cancel func()
+	a      *facade.Assignment
 }
 
 // Running reports how many jobs this worker currently has in flight. Callers
@@ -53,9 +66,43 @@ type Worker struct {
 // are bound to the runner id that claimed them.
 func (w *Worker) Running() int64 { return w.running.Load() }
 
+// CancelSilentJobs cancels the in-flight jobs whose executor has not talked to
+// the facade for at least silence, and reports how many it cancelled. A draining
+// instance calls it so a wedged job cannot hold the drain (and the rollout behind
+// it) until the full shutdown timeout. Jobs that are still reporting are left
+// alone: drain keeps its promise not to cut healthy work short.
+func (w *Worker) CancelSilentJobs(silence time.Duration) int {
+	w.inFlightMu.Lock()
+	defer w.inFlightMu.Unlock()
+	n := 0
+	for id, j := range w.inFlight {
+		if idle := j.a.IdleFor(); idle >= silence {
+			log.Printf("worker %v: job %s 静默 %s（drain 中），判定卡死并取消", w.pool.Labels, id, idle.Round(time.Second))
+			j.cancel()
+			n++
+		}
+	}
+	return n
+}
+
+func (w *Worker) trackInFlight(id string, cancel context.CancelFunc, a *facade.Assignment) {
+	w.inFlightMu.Lock()
+	defer w.inFlightMu.Unlock()
+	if w.inFlight == nil {
+		w.inFlight = map[string]inFlightJob{}
+	}
+	w.inFlight[id] = inFlightJob{cancel: cancel, a: a}
+}
+
+func (w *Worker) untrackInFlight(id string) {
+	w.inFlightMu.Lock()
+	defer w.inFlightMu.Unlock()
+	delete(w.inFlight, id)
+}
+
 // New wires a worker for one pool.
 func New(cfg *config.Config, pool config.Pool, client *giteaclient.Client, f *facade.Server, exec *executor.Manager) *Worker {
-	return &Worker{cfg: cfg, pool: pool, client: client, facade: f, exec: exec}
+	return &Worker{cfg: cfg, pool: pool, client: client, facade: f, exec: exec, inFlight: map[string]inFlightJob{}}
 }
 
 // Run claims and runs tasks until pollCtx is cancelled. In-flight jobs run under
@@ -97,13 +144,18 @@ func (w *Worker) Run(pollCtx, jobCtx context.Context) {
 		go func(t *runnerv1.Task) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			w.run(jobCtx, t)
+			// 每个 job 一个可单独取消的 ctx：drain 时可以只掐掉"卡住"的那个，
+			// 而不是等总超时把所有在跑的 job 一起砍掉。
+			jobRunCtx, cancelJob := context.WithCancel(jobCtx)
+			defer cancelJob()
+			w.run(jobRunCtx, cancelJob, t)
 		}(task)
 	}
 }
 
 // run hands one claimed task to a fresh executor pod and waits for it to finish.
-func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
+// cancelJob lets a draining instance cancel this job alone (see CancelSilentJobs).
+func (w *Worker) run(ctx context.Context, cancelJob context.CancelFunc, t *runnerv1.Task) {
 	w.running.Add(1)
 	defer w.running.Add(-1)
 	repo, runID, job, workflow := taskContext(t)
@@ -129,6 +181,8 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 	a := facade.NewAssignment(t, capability, w.client)
 	w.facade.Add(a)
 	defer w.facade.Remove(capability)
+	w.trackInFlight(id, cancelJob, a)
+	defer w.untrackInFlight(id)
 
 	if err := w.exec.Start(ctx, executor.Spec{
 		AssignmentID:          id,

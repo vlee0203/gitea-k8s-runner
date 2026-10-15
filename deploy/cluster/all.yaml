@@ -81,7 +81,11 @@ metadata:
   namespace: gitea-k8s-runner
 spec:
   strategy:
-    type: Recreate
+    # RollingUpdate（而不是 Recreate）：升级时新实例先起来待命，老实例继续持有租约、
+    # 把它手上的 job 服务完（执行 Pod 只认老实例的 facade），随后退出、租约过期、新实例接管。
+    # 用 Recreate 的话，老实例一天不退出，新实例连启动都等不到 —— 卡死的 job 会把发布堵死。
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 1 }
   replicas: 1
   selector:
     matchLabels: { app: gitea-k8s-runner }
@@ -109,6 +113,14 @@ spec:
             limits: { cpu: 500m, memory: 1Gi, ephemeral-storage: 1Gi }
           ports:
             - { name: http, containerPort: 8080 }
+          # readiness = "已持有租约并在服务"：facade 只在 leadership 期间监听，所以这个探针
+          # 通过就意味着本实例在服务。RollingUpdate 时新实例在拿到租约前 NotReady →
+          # Service 不会把执行 Pod 的请求路由给它（否则那些 job 会因为"这个实例不认识它的
+          # assignment"拿到 401）。故意不配 liveness：drain 期间进程要一直活着把它手上的 job 服务完。
+          readinessProbe:
+            tcpSocket: { port: 8080 }
+            periodSeconds: 5
+            failureThreshold: 2
           env:
             - { name: GITEA_INSTANCE_URL, value: "https://gitea.example.com" }
             - { name: SCOPE, value: cluster }
@@ -119,7 +131,11 @@ spec:
             # 执行 Pod 用它连本 controller（runner 的 --instance 目标）；名字即所指，别再叫 facade
             - { name: CONTROLLER_URL, value: "http://gitea-k8s-runner:8080" }
             - { name: POOLS_FILE, value: /etc/pools/pools.yaml }
+            # drain：在跑的 job 最多等这么久，超时才取消（并报 task 失败供 rerun）
             - { name: SHUTDOWN_TIMEOUT, value: 30m }
+            # drain 期间某个 job 静默这么久（没再跟 controller 说过话）就判定卡死、单独取消它，
+            # 不让一个卡死的 job 把整个发布堵满 SHUTDOWN_TIMEOUT
+            - { name: DRAIN_SILENCE, value: 10m }
             # 共享缓存（deploy/cache.yaml）**才**会创建 ConfigMap gitea-runner-cache-config；
             # 没应用它就别打开下面两行。两行的值要与那份 ConfigMap 里的 external_secret 一致。
             # - { name: CACHE_SERVER_URL, value: "http://gitea-runner-cache:8088/" }

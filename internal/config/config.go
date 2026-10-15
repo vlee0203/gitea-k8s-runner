@@ -76,7 +76,12 @@ type Config struct {
 	// ShutdownTimeout is how long in-flight jobs may drain before they are
 	// cancelled. Must not exceed the pod's terminationGracePeriodSeconds.
 	ShutdownTimeout time.Duration
-	Pools           []Pool
+	// DrainSilence is how long an in-flight job may go without talking to the
+	// facade during a drain before it is treated as wedged and cancelled. Keeps a
+	// hung job from holding the drain (and the rollout behind it) for the whole
+	// ShutdownTimeout, while jobs that are still reporting keep draining.
+	DrainSilence time.Duration
+	Pools        []Pool
 }
 
 func env(key, def string) string {
@@ -104,6 +109,7 @@ func Load() (*Config, error) {
 		KanikoImage:             env("KANIKO_IMAGE", "ghcr.io/osscontainertools/kaniko:v1.28.6-debug"),
 		RegistrationTokenSecret: env("REGISTRATION_TOKEN_SECRET", ""),
 		ShutdownTimeout:         30 * time.Minute,
+		DrainSilence:            10 * time.Minute,
 	}
 	// The shared cache secret, injected by the operator. The controller is a separate service
 	// from the cache-server, so it takes the value its own way — no dependency on how the
@@ -115,6 +121,13 @@ func Load() (*Config, error) {
 			return nil, fmt.Errorf("SHUTDOWN_TIMEOUT: %w", err)
 		}
 		c.ShutdownTimeout = d
+	}
+	if v := env("DRAIN_SILENCE", ""); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("DRAIN_SILENCE: %w", err)
+		}
+		c.DrainSilence = d
 	}
 	if c.GiteaURL == "" {
 		return nil, fmt.Errorf("GITEA_INSTANCE_URL is required")

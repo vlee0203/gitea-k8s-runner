@@ -44,6 +44,10 @@ import (
 // hand a pod to a facade that knows nothing about its task.
 const leaseName = "gitea-k8s-runner"
 
+// drainSweepInterval is how often a draining leader re-checks whether any of its
+// in-flight jobs has gone quiet long enough to be considered wedged.
+const drainSweepInterval = 15 * time.Second
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -100,8 +104,12 @@ func runController(args []string) error {
 	var leading atomic.Bool
 	leadDone := make(chan struct{})
 	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
-		Lock:            lock,
-		ReleaseOnCancel: true,
+		Lock: lock,
+		// 不释放：drain 期间老的 leader 必须继续持有租约、继续服务它手上的 job（执行
+		// Pod 只认这个实例的 facade），新实例起来后先待命，等租约自然过期再接管。
+		// 释放会让新实例立刻接管，而老实例手上的 job 会全部打不通（facade 里没有它们
+		// 的 assignment）。
+		ReleaseOnCancel: false,
 		LeaseDuration:   30 * time.Second,
 		RenewDeadline:   20 * time.Second,
 		RetryPeriod:     5 * time.Second,
@@ -227,16 +235,31 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 		os.Getenv("HOSTNAME"), sc.Kind(), sc.ExecutorNamespace(), cfg.ListenAddr, len(cfg.Pools))
 
 	<-leaderCtx.Done()
-	log.Printf("draining in-flight jobs (timeout %s)", cfg.ShutdownTimeout)
+	log.Printf("draining in-flight jobs (timeout %s, 单 job 静默上限 %s)", cfg.ShutdownTimeout, cfg.DrainSilence)
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()
-	select {
-	case <-done:
-		log.Printf("all in-flight jobs finished")
-	case <-time.After(cfg.ShutdownTimeout):
-		log.Printf("drain timed out: cancelling in-flight jobs")
-		cancelJobs()
-		<-done
+	// 卡死的 job 不能一直占着 drain（它会挡住这次发布）：只掐那些静默超上限的，
+	// 还在上报的 job 照旧等它跑完。被掐的 job 会走 worker 里的 ctx.Done 分支
+	// —— 报 task 失败 + 删 pod。
+	sweep := time.NewTicker(drainSweepInterval)
+	defer sweep.Stop()
+	deadline := time.After(cfg.ShutdownTimeout)
+drain:
+	for {
+		select {
+		case <-done:
+			log.Printf("all in-flight jobs finished")
+			break drain
+		case <-sweep.C:
+			for _, w := range workers {
+				w.CancelSilentJobs(cfg.DrainSilence)
+			}
+		case <-deadline:
+			log.Printf("drain timed out: cancelling in-flight jobs")
+			cancelJobs()
+			<-done
+			break drain
+		}
 	}
 	cancelJobs()
 
