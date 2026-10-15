@@ -35,7 +35,7 @@ Gitea ──领取/回报──▶ controller ──建 Pod──▶ executor Po
 # 1. 注册令牌放进 Secret（controller 经 k8s API 读，不落盘、不随 Pod 分发）
 kubectl -n <ns> create secret generic gitea-runner-registration --from-literal=token=<TOKEN>
 
-# 2. 按需改清单里的 GITEA_INSTANCE_URL / FACADE_URL / pools.yaml，然后应用
+# 2. 按需改清单里的 GITEA_INSTANCE_URL / CONTROLLER_URL / pools.yaml，然后应用
 kubectl apply -f deploy/namespace/all.yaml     # 用户级；集群级用 deploy/cluster/all.yaml
 kubectl apply -f deploy/cache.yaml             # 可选：共享缓存（跨 job 命中 actions/cache）
 ```

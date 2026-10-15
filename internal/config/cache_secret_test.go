@@ -9,6 +9,7 @@ import (
 func minimalEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("GITEA_INSTANCE_URL", "https://gitea.example.com")
+	t.Setenv("CONTROLLER_URL", "http://gitea-k8s-runner:8080")
 	pools := filepath.Join(t.TempDir(), "pools.yaml")
 	body := "pools:\n  - labels: [self-hosted]\n    image: example/runner:1\n    slots: 1\n"
 	if err := os.WriteFile(pools, []byte(body), 0o600); err != nil {

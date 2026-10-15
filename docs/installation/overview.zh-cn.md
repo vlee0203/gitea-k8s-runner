@@ -44,7 +44,7 @@ kubectl -n <ns> create secret generic gitea-runner-registration --from-literal=t
 
 # 2. 按需改清单：
 #    GITEA_INSTANCE_URL  —— 真实 Gitea 地址
-#    FACADE_URL          —— 集群内可达本 controller Service 的地址
+#    CONTROLLER_URL      —— 集群内可达本 controller Service 的地址（执行 Pod 用它连 controller）
 #    pools.yaml          —— 池（labels / image / resources / slots / timeout）
 kubectl apply -f deploy/namespace/all.yaml    # 或 deploy/cluster/all.yaml
 
@@ -91,7 +91,7 @@ job Pod 要访问三类地址：**Gitea**（拉代码）、**controller 的 faca
 ```
 
 平台会**自动**把 `localhost,127.0.0.1,::1,kubernetes.default.svc,.svc,.svc.cluster.local` 以及
-`GITEA_INSTANCE_URL` / `FACADE_URL` / `CACHE_SERVER_URL` 的主机名追加进 `NO_PROXY`——把集群内流量
+`GITEA_INSTANCE_URL` / `CONTROLLER_URL` / `CACHE_SERVER_URL` 的主机名追加进 `NO_PROXY`——把集群内流量
 送去代理是这类环境里最常见的翻车方式。（kaniko 认 `HTTP_PROXY`/`HTTPS_PROXY`：实测把代理指到死端口，
 它会报 `proxyconnect … connection refused`。）
 

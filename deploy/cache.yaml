@@ -41,6 +41,8 @@ spec:
     metadata:
       labels: { app: gitea-runner-cache }
     spec:
+      # cache-server 不调 K8s API；不写这行的话默认会挂一个用不到的 default SA 令牌
+      automountServiceAccountToken: false
       # 私有镜像仓库需要凭据时才启用（名字自取，要和下面容器里的 IMAGE_PULL_SECRET 一致）：
       #   kubectl -n <ns> create secret docker-registry <name> \
       #     --docker-server=<registry> --docker-username=<user> --docker-password=<pass>

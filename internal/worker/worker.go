@@ -135,7 +135,7 @@ func (w *Worker) run(ctx context.Context, t *runnerv1.Task) {
 		Image:                 w.pool.Image,
 		Labels:                w.pool.Labels,
 		Capability:            capability,
-		FacadeURL:             w.cfg.FacadeURL,
+		ControllerURL:         w.cfg.ControllerURL,
 		Resources:             resources(w.pool.Resources),
 		ImagePullSecret:       w.cfg.ImagePullSecret,
 		RunnerConfig:          w.cfg.CacheConfigYAML(),

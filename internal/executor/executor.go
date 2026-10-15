@@ -43,12 +43,12 @@ const maxNameLen = 63
 
 // Spec describes one executor to launch for a claimed task.
 type Spec struct {
-	AssignmentID string // Gitea task id: immutable, never reused
-	Image        string
-	Labels       []string
-	Capability   string // bearer secret the pod presents to the facade
-	FacadeURL    string // runner --instance target
-	Resources    corev1.ResourceRequirements
+	AssignmentID  string // Gitea task id: immutable, never reused
+	Image         string
+	Labels        []string
+	Capability    string // bearer secret the pod presents to the facade
+	ControllerURL string // 执行 Pod 用来连本 controller 的地址（runner 的 --instance 目标）
+	Resources     corev1.ResourceRequirements
 	// ImagePullSecret, when set, is used to pull the executor image.
 	ImagePullSecret string
 	// RunnerConfig, when set, is written as the runner's config.yaml so the job
@@ -169,8 +169,9 @@ func annotationsFor(s Spec) map[string]string {
 const injectedRunnerVolume = "runner"
 
 // injectedEntrypoint is a POSIX-sh stand-in for the runner image's run.sh: it
-// registers against the facade and runs exactly one job. It must stay POSIX
-// because images the runner is injected into (kaniko) ship busybox sh, not bash.
+// registers against this controller (CONTROLLER_URL) and runs exactly one job.
+// It must stay POSIX because images the runner is injected into (kaniko) ship
+// busybox sh, not bash.
 const injectedEntrypoint = `#!/bin/sh
 set -e
 CFG=""
@@ -180,7 +181,7 @@ if [ -n "$CONFIG_FILE" ]; then CFG="--config=$CONFIG_FILE"; fi
 # into the working directory and daemon reads it back from the same place.
 cd /opt/gkr
 TOKEN=$(cat /etc/gkr/` + CapabilityKey + `)
-/opt/gkr/gitea-runner register --instance "$GITEA_INSTANCE_URL" --token "$TOKEN" \
+/opt/gkr/gitea-runner register --instance "$CONTROLLER_URL" --token "$TOKEN" \
   --name "$GITEA_RUNNER_NAME" --labels "$GITEA_RUNNER_LABELS" --ephemeral --no-interactive $CFG
 # docker 替身放进 PATH（injectRunner 池的镜像里没有它）
 [ -x /opt/gkr/docker ] && cp /opt/gkr/docker /usr/local/bin/docker 2>/dev/null || true
@@ -279,7 +280,7 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 	}
 
 	env := []corev1.EnvVar{
-		{Name: "GITEA_INSTANCE_URL", Value: s.FacadeURL},
+		{Name: "CONTROLLER_URL", Value: s.ControllerURL},
 		{Name: "GITEA_RUNNER_REGISTRATION_TOKEN_FILE", Value: "/etc/gkr/" + CapabilityKey},
 		{Name: "GITEA_RUNNER_LABELS", Value: strings.Join(s.Labels, ",")},
 		{Name: "GITEA_RUNNER_NAME", Value: runnerName(s)},

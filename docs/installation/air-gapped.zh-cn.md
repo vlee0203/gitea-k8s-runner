@@ -126,9 +126,9 @@ kubectl -n <gitea-ns> set env sts/<gitea> \
 | kaniko 旁路容器 | 构建上下文是**本地目录**（`dir://`），不连 Gitea；**但**workflow 若往自签的 Gitea registry 推镜像，它就要 | 推镜像时才要 |
 | workflow 里直接访问 Gitea API 的步骤 | Gitea（https） | 要（得用带 CA 的执行环境镜像） |
 
-依据：执行 Pod 的 `GITEA_INSTANCE_URL` 被设成 **facade 地址**（`internal/executor/executor.go` 里
-`{Name: "GITEA_INSTANCE_URL", Value: s.FacadeURL}`），而 facade 是集群内的明文 Service；controller 侧
-全代码没有 `InsecureSkipVerify`，走标准证书校验。
+依据：执行 Pod 里的 `CONTROLLER_URL` 指向 **controller 自己**（`internal/executor/executor.go` 里
+`{Name: "CONTROLLER_URL", Value: s.ControllerURL}`，就是集群内的明文 Service），所以 Pod 侧取代码不走
+Gitea；controller 侧全代码没有 `InsecureSkipVerify`，走标准证书校验。
 
 ### controller（必需）
 
@@ -263,7 +263,7 @@ RUN update-ca-certificates
 
 - **执行 Pod 与 controller 同命名空间**：`SCOPE=namespace`，`TARGET_NAMESPACE` 用 fieldRef 取自己，
   这样只需要该命名空间的 RBAC，不需要集群级权限。
-- **服务名用模板变量**：`FACADE_URL` 要指向本应用自己的 Service（`http://<app_name>:8080`）。
+- **服务名用模板变量**：`CONTROLLER_URL` 要指向本应用自己的 Service（`http://<app_name>:8080`）。
 - **自定义 CA 不在模板里**（模板不替环境做决定）：自签证书时按需加一处 env + 一个卷 —— 具体加法在
   实际部署时确定（挂载点 `/etc/gkr-ca` + `SSL_CERT_DIR=/etc/ssl/certs:/etc/gkr-ca`，已验证：CA 在则
   自签证书被信任、CA 不在则公网证书照常可信）。

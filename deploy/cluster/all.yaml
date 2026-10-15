@@ -90,9 +90,8 @@ spec:
       labels: { app: gitea-k8s-runner }
     spec:
       serviceAccountName: gitea-k8s-runner
-      # 关掉自动挂载，改用下面的投射令牌卷：controller 确实需要 API 权限（建/删 Pod、读状态
-      # Secret），而投射令牌是 audience 收窄 + 有有效期的，比默认挂载那个更好。
-      automountServiceAccountToken: false
+      # controller 要调 K8s API（建/删 Pod、读状态 Secret）→ 直接开自动挂载，用默认注入的 SA 令牌
+      automountServiceAccountToken: true
       terminationGracePeriodSeconds: 3660
       # 私有镜像仓库需要凭据时才启用（名字自取，要和下面容器里的 IMAGE_PULL_SECRET 一致）：
       #   kubectl -n <ns> create secret docker-registry <name> \
@@ -117,7 +116,8 @@ spec:
             # 注册令牌从 Secret 经 API 读；也可改回挂文件（REGISTRATION_TOKEN_FILE + 下方注释里的 volume），
             # 但那样令牌会落在 Pod 文件系统里，且换令牌要重启。
             - { name: REGISTRATION_TOKEN_SECRET, value: gitea-runner-registration }
-            - { name: FACADE_URL, value: "http://gitea-k8s-runner:8080" }
+            # 执行 Pod 用它连本 controller（runner 的 --instance 目标）；名字即所指，别再叫 facade
+            - { name: CONTROLLER_URL, value: "http://gitea-k8s-runner:8080" }
             - { name: POOLS_FILE, value: /etc/pools/pools.yaml }
             - { name: SHUTDOWN_TIMEOUT, value: 30m }
             # 共享缓存（deploy/cache.yaml）**才**会创建 ConfigMap gitea-runner-cache-config；
@@ -126,7 +126,9 @@ spec:
             # - { name: CACHE_SERVER_SECRET, value: <与 cache ConfigMap 里 external_secret 相同的值> }
             # Gitea 用自签/企业 CA 时打开（另见文件末尾 gkr-ca 卷的注释）：
             # 只有 controller 需要信任它 —— 执行 Pod 全程只跟集群内的 facade 说 http。
-            # - { name: SSL_CERT_FILE, value: /etc/gkr-ca/ca.crt }
+            # 用 SSL_CERT_DIR 而不是 SSL_CERT_FILE：两者都是"替换"语义，只给自定义 CA 会把系统根证书顶掉；
+            # 把 /etc/ssl/certs 一并列上，自定义 CA 与公网根证书才同时可用（实测过）。
+            # - { name: SSL_CERT_DIR, value: "/etc/ssl/certs:/etc/gkr-ca" }
             # executor Pod 的 imagePullSecrets（上面那个 secret 的名字）；仓库可匿名拉取就留空。
             # - { name: IMAGE_PULL_SECRET, value: registry-pull }
             # injectRunner 的池从该镜像取 gitea-runner 二进制（静态 Go，busybox 下可跑）。
@@ -142,20 +144,11 @@ spec:
             - { name: KANIKO_IMAGE, value: ghcr.io/osscontainertools/kaniko:v1.28.6-debug }
           volumeMounts:
             - { name: pools, mountPath: /etc/pools, readOnly: true }
-            - { name: kube-api-access, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true }
             # - { name: gkr-ca, mountPath: /etc/gkr-ca, readOnly: true }
       volumes:
         - name: pools
           configMap: { name: gitea-k8s-runner-pools }
-        # automountServiceAccountToken: false 本该提供的那份（token + CA + namespace）
-        - name: kube-api-access
-          projected:
-            defaultMode: 420
-            sources:
-              - serviceAccountToken: { path: token, expirationSeconds: 3600 }
-              - configMap: { name: kube-root-ca.crt, items: [{ key: ca.crt, path: ca.crt }] }
-              - downwardAPI: { items: [{ path: namespace, fieldRef: { fieldPath: metadata.namespace } }] }
-        # Gitea 用自签/企业 CA 时打开这三个（连同上面的 SSL_CERT_FILE 与 volumeMount）。
+        # Gitea 用自签/企业 CA 时打开这三个（连同上面的 SSL_CERT_DIR 与 volumeMount）。
         # CA 证书是公开材料，用 ConfigMap 而不是 Secret：
         #   kubectl -n <ns> create configmap gitea-ca --from-file=ca.crt=corp-ca.crt
         # optional: true 让这个 ConfigMap 不存在时也不阻塞 Pod 启动。

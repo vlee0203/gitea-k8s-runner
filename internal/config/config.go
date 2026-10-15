@@ -44,13 +44,12 @@ type poolsFile struct {
 	Pools []Pool `yaml:"pools"`
 }
 
-
 // Config is the resolved controller configuration.
 type Config struct {
 	GiteaURL              string // real Gitea base URL
 	RegistrationTokenFile string // file holding this worker's Gitea registration token
-	FacadeURL             string // URL an executor pod uses to reach the facade
-	ListenAddr            string // facade listen address
+	ControllerURL         string // URL an executor pod uses to reach this controller (its runner-facing endpoint)
+	ListenAddr            string // runner-facing endpoint listen address
 	Scope                 string // "namespace" or "cluster"
 	TargetNamespace       string // where executor pods are created
 	WorkerName            string // base name of the registered runner
@@ -93,7 +92,7 @@ func Load() (*Config, error) {
 	c := &Config{
 		GiteaURL:                strings.TrimRight(env("GITEA_INSTANCE_URL", ""), "/"),
 		RegistrationTokenFile:   env("REGISTRATION_TOKEN_FILE", "/etc/gitea-k8s-runner/registration-token"),
-		FacadeURL:               env("FACADE_URL", ""),
+		ControllerURL:           env("CONTROLLER_URL", ""),
 		ListenAddr:              env("LISTEN_ADDR", ":8080"),
 		Scope:                   env("SCOPE", "namespace"),
 		TargetNamespace:         env("TARGET_NAMESPACE", ""),
@@ -119,6 +118,10 @@ func Load() (*Config, error) {
 	}
 	if c.GiteaURL == "" {
 		return nil, fmt.Errorf("GITEA_INSTANCE_URL is required")
+	}
+	if c.ControllerURL == "" {
+		// 执行 Pod 靠这个地址回连 controller 才能注册/取任务；缺了要在启动时就报，而不是等 job 起不来
+		return nil, fmt.Errorf("CONTROLLER_URL is required (executor pods use it to reach this controller)")
 	}
 	if c.Scope != "namespace" && c.Scope != "cluster" {
 		return nil, fmt.Errorf("SCOPE must be namespace or cluster, got %q", c.Scope)
@@ -220,7 +223,7 @@ func (c *Config) ProxyEnv() map[string]string {
 // noProxyHosts lists the in-cluster hosts a job pod must reach directly.
 func (c *Config) noProxyHosts() []string {
 	hosts := []string{"localhost", "127.0.0.1", "::1", "kubernetes.default.svc", ".svc", ".svc.cluster.local"}
-	for _, raw := range []string{c.GiteaURL, c.FacadeURL, c.CacheServerURL} {
+	for _, raw := range []string{c.GiteaURL, c.ControllerURL, c.CacheServerURL} {
 		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
 			hosts = append(hosts, u.Hostname())
 		}

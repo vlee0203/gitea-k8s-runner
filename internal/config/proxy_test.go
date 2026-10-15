@@ -8,7 +8,7 @@ import (
 func TestProxyEnv(t *testing.T) {
 	c := &Config{
 		GiteaURL:       "https://gitea.example.com",
-		FacadeURL:      "http://gitea-k8s-runner:8080",
+		ControllerURL:  "http://gitea-k8s-runner:8080",
 		CacheServerURL: "http://gitea-runner-cache:8088/",
 	}
 	// 没有代理时：不带代理变量，但仍给出集群内 NO_PROXY 列表（替身转交 workflow 自带代理时要用）
