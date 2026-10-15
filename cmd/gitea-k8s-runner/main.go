@@ -16,7 +16,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -172,7 +171,6 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 
 	clients := make([]*giteaclient.Client, 0, len(cfg.Pools))
 	workers := make([]*worker.Worker, 0, len(cfg.Pools))
-	var wg sync.WaitGroup
 	for i := range cfg.Pools {
 		pool := cfg.Pools[i]
 		cli := giteaclient.New(cfg.GiteaURL, httpClient)
@@ -206,11 +204,7 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 
 		w := worker.New(cfg, pool, cli, fac, exec)
 		workers = append(workers, w)
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			w.Run(leaderCtx, jobCtx)
-		}()
+		go w.Run(leaderCtx, jobCtx)
 	}
 
 	// Executors left over from a predecessor are adopted: their assignments live in
@@ -249,23 +243,20 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 
 	<-leaderCtx.Done()
 	log.Printf("draining in-flight jobs (timeout %s, 单 job 静默上限 %s)", cfg.ShutdownTimeout, cfg.DrainSilence)
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
 	// 卡死的 job 不能一直占着 drain（它会挡住这次发布）：只掐那些静默超上限的，
 	// 还在上报的 job 照旧等它跑完。被掐的 job 会走 worker 里的 ctx.Done 分支
 	// —— 报 task 失败 + 删 pod。
+	//
+	// 结束条件只用"各 worker 的 running 之和为 0"，不再等 worker 的 WaitGroup：
+	// 只接管了 job 的实例，其 worker 循环一起跑完就返回，WaitGroup 立刻归零 —— 那样
+	// drain 会瞬间判定结束、连一次裁剪都跑不到（实测：被接管的卡死 job 一直留到实例退出）。
 	sweep := time.NewTicker(drainSweepInterval)
 	defer sweep.Stop()
 	deadline := time.After(cfg.ShutdownTimeout)
 drain:
 	for {
 		select {
-		case <-done:
-			log.Printf("all in-flight jobs finished")
-			break drain
 		case <-sweep.C:
-			// 等待条件必须包含"接管的 job"：它们不产生 worker goroutine，只看 wg 会在
-			// 只有接管 job 时立刻判定 drain 结束（实测踩过：这样一个 job 一直留到实例退出）。
 			remaining := int64(0)
 			for _, w := range workers {
 				w.CancelSilentJobs(leaderCtx, cfg.DrainSilence)
@@ -278,7 +269,7 @@ drain:
 		case <-deadline:
 			log.Printf("drain timed out: cancelling in-flight jobs")
 			cancelJobs()
-			<-done
+			waitJobsStopped(workers, 30*time.Second)
 			break drain
 		}
 	}
@@ -287,6 +278,22 @@ drain:
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdownCtx)
+}
+
+// waitJobsStopped waits for every worker to have no job in flight, so the drain
+// does not shut the facade down while a job is still talking to it.
+func waitJobsStopped(workers []*worker.Worker, limit time.Duration) {
+	deadline := time.Now().Add(limit)
+	for time.Now().Before(deadline) {
+		remaining := int64(0)
+		for _, w := range workers {
+			remaining += w.Running()
+		}
+		if remaining == 0 {
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
 }
 
 // newGiteaProxy forwards everything that is not the runner protocol to the real

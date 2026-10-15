@@ -185,30 +185,21 @@ stringData:
 
 
 
-把 CA 放进一个 ConfigMap（证书是公开材料，不必用 Secret），挂进 Deployment 并设 `SSL_CERT_FILE`（Go 标准库认这个变量）：
-
-```bash
-kubectl -n <ns> create configmap gitea-ca --from-file=ca.crt=corp-ca.crt
-```
-
-清单里已经放好了注释块（`deploy/*/all.yaml` 搜 `gkr-ca`）：把 `SSL_CERT_FILE=/etc/gkr-ca/ca.crt`、
-`gkr-ca` 卷与卷挂载三处取消注释即可。**做成 Sealos 模板的话**，把 CA 放进 ConfigMap、用一个
-`ssl_cert_file` 输入指向 `/etc/gkr-ca/ca.crt` 即可（见[第七节](#七做成-sealos-模板时的注意点)）。
-
 ### 执行 Pod（只在特定场景需要）
 
 正常流量不需要（全程走 facade 明文）。只有这两种情况：① workflow 往自签的 Gitea registry 推镜像
-（kaniko 容器）② workflow 步骤直接访问 Gitea API（runner 容器）。这时**把 CA 烧进对应镜像**：
+（kaniko 容器）② workflow 从自签 Gitea 取 action（runner 容器）。
 
-```dockerfile
-FROM ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest     # kaniko 则 FROM 那个 kaniko 镜像
-COPY corp-ca.crt /usr/local/share/ca-certificates/corp-ca.crt
-RUN update-ca-certificates
-```
+这两种情况**不用烧镜像**：把上面那份 CA Secret 的名字填进 controller 的 `EXECUTOR_CA_SECRET`
+即可（清单里有注释行）。controller 建执行 Pod 时会：
 
-再把 `runner_image` / `kaniko_image` 指到这个派生镜像。执行 Pod 目前**无法注入额外卷或环境变量**
-（池的字段只有 `labels/image/resources/slots/timeout`），所以 CA 只能进镜像；平台侧的开关注释在
-`docs/installation/overview.zh-cn.md` 有记录但尚未实现。
+- 加一个 `ca-bundle` init 容器，把**镜像自带的根证书**与该 CA 拼成一个 bundle
+- 给每个容器（runner 与 kaniko）挂载该 bundle，并把各工具链实际认的变量指过去：
+  `SSL_CERT_FILE`（Go/kaniko、OpenSSL）、`SSL_CERT_DIR`（双保险）、`CURL_CA_BUNDLE`、`GIT_SSL_CAINFO`、
+  `NODE_EXTRA_CA_CERTS`（JS action 的 fetch）、`REQUESTS_CA_BUNDLE`（python）
+
+**注意是"拼接"而不是只指自定义 CA**：这些变量都是替换语义，只给自定义 CA 会把公网根证书顶掉，
+Pod 里再访问任何公网 https 就废了。
 
 ## 五、集群前置条件
 
