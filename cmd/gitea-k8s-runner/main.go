@@ -214,7 +214,14 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 	_, pingH := fac.PingHandler()
 	mux.Handle("/api/actions/runner.v1.RunnerService/", http.StripPrefix("/api/actions", runnerH))
 	mux.Handle("/api/actions/ping.v1.PingService/", http.StripPrefix("/api/actions", pingH))
-	mux.Handle("/", httputil.NewSingleHostReverseProxy(giteaURL))
+	// Rewrite（而不是默认的 Director）以改写 Host：NewSingleHostReverseProxy 默认把
+	// **入站的 Host** 原样发给上游（Go 文档明写），于是上游只看到 facade 的服务名。
+	// Gitea 若在按 Host 路由的网关/ingress 后面，就会因"没有该 Host 的路由"回 404
+	// （实测复现：同一路径直连 200、经 facade 404，响应头 Server: istio-envoy）。
+	// SetURL 会把 Out.Host 置空 → Transport 改用 URL.Host，即 GITEA_INSTANCE_URL 的主机。
+	giteaProxy := httputil.NewSingleHostReverseProxy(giteaURL)
+	giteaProxy.Rewrite = func(r *httputil.ProxyRequest) { r.SetURL(giteaURL) }
+	mux.Handle("/", giteaProxy)
 
 	srv := &http.Server{Addr: cfg.ListenAddr, Handler: mux}
 	go func() {
