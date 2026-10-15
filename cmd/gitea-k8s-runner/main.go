@@ -38,10 +38,11 @@ import (
 	"github.com/vlee0203/gitea-k8s-runner/internal/worker"
 )
 
-// leaseName is the mutual-exclusion lock. Only the holder may serve: the facade
-// keeps each claimed task in process memory and executor pods reach it through a
-// Service that load-balances across replicas, so a second live instance would
-// hand a pod to a facade that knows nothing about its task.
+// leaseName is the mutual-exclusion lock. Only the holder claims new tasks: a
+// claimed task can only be reported by the runner identity that claimed it, and
+// each pool has exactly one identity. Serving is not exclusive — the facade
+// resolves every call from the assignment's Secret, so any instance (including a
+// fresh replacement) can serve any pod.
 const leaseName = "gitea-k8s-runner"
 
 // drainSweepInterval is how often a draining leader re-checks whether any of its
@@ -105,11 +106,10 @@ func runController(args []string) error {
 	leadDone := make(chan struct{})
 	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
 		Lock: lock,
-		// 不释放：drain 期间老的 leader 必须继续持有租约、继续服务它手上的 job（执行
-		// Pod 只认这个实例的 facade），新实例起来后先待命，等租约自然过期再接管。
-		// 释放会让新实例立刻接管，而老实例手上的 job 会全部打不通（facade 里没有它们
-		// 的 assignment）。
-		ReleaseOnCancel: false,
+		// 释放：服务是无状态的（facade 从 assignment 的 Secret 解析），所以新实例
+		// 一拿到租约就能既服务老实例手上的 job、又开始领新活；老实例继续 drain 它自己
+		// 的 job，两边并行不冲突。
+		ReleaseOnCancel: true,
 		LeaseDuration:   30 * time.Second,
 		RenewDeadline:   20 * time.Second,
 		RetryPeriod:     5 * time.Second,
@@ -137,8 +137,16 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 	defer cancelJobs()
 
 	store := state.New(cs, sc.ExecutorNamespace(), cfg.StateSecretName)
-	fac := facade.New()
 	exec := executor.New(cs, sc.ExecutorNamespace())
+	// 池身份表：facade 解析一条 assignment 时要用它把回报交给"领取它的那个 runner"。
+	// 每个实例都持有全部池的身份（同一份 pools 配置），所以任何实例都能服务任何 job。
+	poolClients := map[string]*giteaclient.Client{}
+	fac := facade.New(facade.NewK8sResolver(cs, sc.ExecutorNamespace(), func(poolKey string) facade.Upstream {
+		if c := poolClients[poolKey]; c != nil {
+			return c
+		}
+		return nil
+	}))
 	httpClient := &http.Client{Timeout: 60 * time.Second}
 
 	// Prove the state Secret is writable before registering anything: a failed
@@ -190,6 +198,7 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 			log.Printf("registered worker %q for %v", r.Name, pool.Labels)
 		}
 		cli.SetIdentity(id.UUID, id.Token)
+		poolClients[key] = cli
 		if err := cli.Declare(leaderCtx, pool.Labels); err != nil {
 			fatal("declare %v: %v", pool.Labels, err)
 		}
@@ -204,10 +213,14 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 		}()
 	}
 
-	// Executors left over from a previous run cannot be adopted (the claimed
-	// task lives only in the dead facade), so clean them up and fail their tasks
-	// for Gitea to rerun.
-	lifecycle.New(exec, clients).Recover(jobCtx)
+	// Executors left over from a predecessor are adopted: their assignments live in
+	// their Secrets, so this instance can serve them without failing the job. Only
+	// pods whose assignment (or pool) is gone get deleted.
+	adopters := map[string]lifecycle.Adopter{}
+	for i := range cfg.Pools {
+		adopters[cfg.PoolStateKey(cfg.Pools[i])] = workers[i]
+	}
+	lifecycle.New(exec, adopters).Recover(jobCtx)
 
 	// An executor pod points its runner at this address (the facade), so the
 	// runner also treats it as the job's server URL — e.g. actions/checkout
@@ -252,7 +265,7 @@ drain:
 			break drain
 		case <-sweep.C:
 			for _, w := range workers {
-				w.CancelSilentJobs(cfg.DrainSilence)
+				w.CancelSilentJobs(leaderCtx, cfg.DrainSilence)
 			}
 		case <-deadline:
 			log.Printf("drain timed out: cancelling in-flight jobs")

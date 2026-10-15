@@ -1,13 +1,18 @@
 // Package facade is the RunnerService endpoint that executor pods talk to. A
-// worker hands it the task it has already claimed, so the task cannot be picked
-// up by any other job; the pod's stock gitea-runner fetches that task here and
-// reports back here, and the facade forwards both to Gitea under the claiming
-// runner's identity.
+// worker claims its task from Gitea first (so no other runner can pick it up) and
+// the pod's stock gitea-runner fetches that task here and reports back here; the
+// facade forwards the reports to Gitea under the claiming runner's identity.
+//
+// It keeps no assignment state: every call is resolved through a Resolver, so any
+// instance can serve any pod. That is what makes a rolling update gapless (a pod
+// never depends on reaching the instance that started it) and lets a successor
+// adopt jobs that are still running.
 package facade
 
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -79,27 +84,25 @@ func (a *Assignment) take() *runnerv1.Task {
 	return a.Task
 }
 
-// Server implements the Gitea RunnerService handler for executor pods.
+// Server implements the Gitea RunnerService handler for executor pods. It holds no
+// assignment state of its own: it resolves every call, so any instance can serve
+// any pod (see Resolver).
 type Server struct {
-	mu    sync.Mutex
-	byCap map[string]*Assignment
+	res Resolver
 }
 
-// New returns an empty facade.
-func New() *Server { return &Server{byCap: map[string]*Assignment{}} }
+// New returns a facade that resolves assignments through res.
+func New(res Resolver) *Server { return &Server{res: res} }
 
-// Add registers an assignment, reachable by its capability.
-func (s *Server) Add(a *Assignment) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.byCap[a.Capability] = a
+// IdleFor reports how long an assignment has been quiet; the drain uses it to tell
+// a working job from a wedged one.
+func (s *Server) IdleFor(ctx context.Context, capability string) time.Duration {
+	return s.res.IdleFor(ctx, capability)
 }
 
-// Remove drops an assignment.
-func (s *Server) Remove(capability string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.byCap, capability)
+// Reported says whether this assignment already reported a terminal result.
+func (s *Server) Reported(ctx context.Context, capability string) bool {
+	return s.res.Reported(ctx, capability)
 }
 
 // Handler returns the connect service path and handler to mount.
@@ -107,18 +110,20 @@ func (s *Server) Handler() (string, http.Handler) {
 	return runnerv1connect.NewRunnerServiceHandler(s)
 }
 
-func (s *Server) byToken(tok string) *Assignment {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.byCap[tok]
+func (s *Server) byToken(ctx context.Context, tok string) (*Assignment, error) {
+	a, err := s.res.Resolve(ctx, tok)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errUnknownCapability)
+	}
+	return a, nil
 }
 
 // Register treats the capability as the registration token and returns a
 // synthetic runner; nothing is written to Gitea.
-func (s *Server) Register(_ context.Context, req *connect.Request[runnerv1.RegisterRequest]) (*connect.Response[runnerv1.RegisterResponse], error) {
-	a := s.byToken(req.Msg.Token)
-	if a == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, errUnknownCapability)
+func (s *Server) Register(ctx context.Context, req *connect.Request[runnerv1.RegisterRequest]) (*connect.Response[runnerv1.RegisterResponse], error) {
+	a, err := s.byToken(ctx, req.Msg.Token)
+	if err != nil {
+		return nil, err
 	}
 	a.Touch()
 	return connect.NewResponse(&runnerv1.RegisterResponse{Runner: &runnerv1.Runner{
@@ -127,10 +132,10 @@ func (s *Server) Register(_ context.Context, req *connect.Request[runnerv1.Regis
 }
 
 // Declare acknowledges the executor.
-func (s *Server) Declare(_ context.Context, req *connect.Request[runnerv1.DeclareRequest]) (*connect.Response[runnerv1.DeclareResponse], error) {
-	a := s.byToken(req.Header().Get(tokenHeader))
-	if a == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, errUnknownCapability)
+func (s *Server) Declare(ctx context.Context, req *connect.Request[runnerv1.DeclareRequest]) (*connect.Response[runnerv1.DeclareResponse], error) {
+	a, err := s.byToken(ctx, req.Header().Get(tokenHeader))
+	if err != nil {
+		return nil, err
 	}
 	a.Touch() // 执行 Pod 说话 = 这个 job 还活着（drain 判卡死用）
 	return connect.NewResponse(&runnerv1.DeclareResponse{Runner: &runnerv1.Runner{
@@ -139,10 +144,10 @@ func (s *Server) Declare(_ context.Context, req *connect.Request[runnerv1.Declar
 }
 
 // FetchTask hands the pre-claimed task to the executor exactly once.
-func (s *Server) FetchTask(_ context.Context, req *connect.Request[runnerv1.FetchTaskRequest]) (*connect.Response[runnerv1.FetchTaskResponse], error) {
-	a := s.byToken(req.Header().Get(tokenHeader))
-	if a == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, errUnknownCapability)
+func (s *Server) FetchTask(ctx context.Context, req *connect.Request[runnerv1.FetchTaskRequest]) (*connect.Response[runnerv1.FetchTaskResponse], error) {
+	a, err := s.byToken(ctx, req.Header().Get(tokenHeader))
+	if err != nil {
+		return nil, err
 	}
 	a.Touch() // 执行 Pod 说话 = 这个 job 还活着（drain 判卡死用）
 	return connect.NewResponse(&runnerv1.FetchTaskResponse{Task: a.take(), TasksVersion: req.Msg.TasksVersion}), nil
@@ -150,9 +155,9 @@ func (s *Server) FetchTask(_ context.Context, req *connect.Request[runnerv1.Fetc
 
 // UpdateTask forwards a task state to Gitea and closes Done on a terminal result.
 func (s *Server) UpdateTask(ctx context.Context, req *connect.Request[runnerv1.UpdateTaskRequest]) (*connect.Response[runnerv1.UpdateTaskResponse], error) {
-	a := s.byToken(req.Header().Get(tokenHeader))
-	if a == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, errUnknownCapability)
+	a, err := s.byToken(ctx, req.Header().Get(tokenHeader))
+	if err != nil {
+		return nil, err
 	}
 	a.Touch() // 执行 Pod 说话 = 这个 job 还活着（drain 判卡死用）
 	state, err := a.Upstream.UpdateTask(ctx, req.Msg.State, req.Msg.Outputs)
@@ -161,15 +166,18 @@ func (s *Server) UpdateTask(ctx context.Context, req *connect.Request[runnerv1.U
 	}
 	if req.Msg.State != nil && req.Msg.State.Result != runnerv1.Result_RESULT_UNSPECIFIED {
 		a.finish()
+		if err := s.res.MarkReported(ctx, a.Capability); err != nil {
+			log.Printf("facade: record terminal report: %v", err)
+		}
 	}
 	return connect.NewResponse(&runnerv1.UpdateTaskResponse{State: state}), nil
 }
 
 // UpdateLog forwards a batch of log rows to Gitea.
 func (s *Server) UpdateLog(ctx context.Context, req *connect.Request[runnerv1.UpdateLogRequest]) (*connect.Response[runnerv1.UpdateLogResponse], error) {
-	a := s.byToken(req.Header().Get(tokenHeader))
-	if a == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, errUnknownCapability)
+	a, err := s.byToken(ctx, req.Header().Get(tokenHeader))
+	if err != nil {
+		return nil, err
 	}
 	a.Touch() // 执行 Pod 说话 = 这个 job 还活着（drain 判卡死用）
 	ack, err := a.Upstream.UpdateLog(ctx, req.Msg.TaskId, req.Msg.Index, req.Msg.Rows, req.Msg.NoMore)

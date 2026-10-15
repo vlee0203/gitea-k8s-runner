@@ -5,11 +5,16 @@ package executor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"sort"
 	"strings"
 
+	runnerv1 "gitea.dev/actionslib/runner/v1"
+	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -30,10 +35,34 @@ const (
 )
 
 // Secret keys: the assignment capability, and an optional runner config file.
+// The task and its pool are stored alongside so that any controller instance can
+// serve this job — the assignment's facts live in the per-job Secret (the same
+// shape ARC uses for its per-runner jitToken Secret), not in one process's memory.
 const (
 	CapabilityKey = "capability"
 	ConfigKey     = "config.yaml"
+	TaskKey       = "task"    // base64(proto.Marshal(Task))
+	PoolKeyKey    = "poolKey" // which pool's runner identity claimed this task
+	// CapabilityHashLabel lets the facade find this Secret from the capability
+	// alone (the capability is a 256-bit bearer; its hash is not reversible).
+	CapabilityHashLabel = "gitea-k8s-runner/capability-hash"
 )
+
+// CapabilityHash is the label value that lets any instance find the assignment
+// Secret from the capability alone. One-way: the capability stays the credential.
+func CapabilityHash(capability string) string {
+	sum := sha256.Sum256([]byte(capability))
+	return hex.EncodeToString(sum[:8])
+}
+
+func withHashLabel(labels map[string]string, capability string) map[string]string {
+	out := map[string]string{}
+	for k, v := range labels {
+		out[k] = v
+	}
+	out[CapabilityHashLabel] = CapabilityHash(capability)
+	return out
+}
 
 // namePrefix starts every executor pod/secret name.
 const namePrefix = "gitea-runner"
@@ -48,7 +77,12 @@ type Spec struct {
 	Labels        []string
 	Capability    string // bearer secret the pod presents to the facade
 	ControllerURL string // 执行 Pod 用来连本 controller 的地址（runner 的 --instance 目标）
-	Resources     corev1.ResourceRequirements
+	// Task and PoolKey are persisted into the assignment Secret so that any
+	// controller instance can serve this job, and so a successor can adopt it.
+	// PoolKey says whose runner identity reports it back to Gitea.
+	Task      *runnerv1.Task
+	PoolKey   string
+	Resources corev1.ResourceRequirements
 	// ImagePullSecret, when set, is used to pull the executor image.
 	ImagePullSecret string
 	// RunnerConfig, when set, is written as the runner's config.yaml so the job
@@ -270,8 +304,21 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 	if s.RunnerConfig != "" {
 		data[ConfigKey] = s.RunnerConfig
 	}
+	if s.PoolKey != "" {
+		data[PoolKeyKey] = s.PoolKey
+	}
+	if s.Task != nil {
+		if raw, err := proto.Marshal(s.Task); err == nil {
+			data[TaskKey] = base64.StdEncoding.EncodeToString(raw)
+		} else {
+			// 序列化失败不该拖垮这个 job：本实例仍能服务它（内存里有），只是别的实例不能接手
+			log.Printf("executor: marshal task for %s: %v (本实例之外的实例无法服务这个 job)", name, err)
+		}
+	}
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: m.namespace, Labels: labels, Annotations: annotations},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: m.namespace,
+			Labels:      withHashLabel(labels, s.Capability),
+			Annotations: annotations},
 		Type:       corev1.SecretTypeOpaque,
 		StringData: data,
 	}
@@ -431,6 +478,22 @@ func (m *Manager) Phase(ctx context.Context, assignmentID string) (corev1.PodPha
 		return corev1.PodRunning, nil
 	}
 	return pod.Status.Phase, nil
+}
+
+// Assignment returns the capability and pool key recorded for an assignment id.
+// A successor instance adopts leftover pods through this: the facts live in the
+// assignment Secret, so they survive the instance that created them.
+func (m *Manager) Assignment(ctx context.Context, assignmentID string) (capability, poolKey string, ok bool) {
+	sel := ManagedByLabel + "=" + ManagedByValue + "," + AssignmentIDLabel + "=" + assignmentID
+	list, err := m.cs.CoreV1().Secrets(m.namespace).List(ctx, metav1.ListOptions{LabelSelector: sel})
+	if err != nil || len(list.Items) == 0 {
+		return "", "", false
+	}
+	sec := &list.Items[0]
+	if len(sec.Data[CapabilityKey]) == 0 {
+		return "", "", false
+	}
+	return string(sec.Data[CapabilityKey]), string(sec.Data[PoolKeyKey]), true
 }
 
 // StartFailure returns why the pod for this assignment can never start ("" if it

@@ -113,10 +113,9 @@ spec:
             limits: { cpu: 500m, memory: 1Gi, ephemeral-storage: 1Gi }
           ports:
             - { name: http, containerPort: 8080 }
-          # readiness = "已持有租约并在服务"：facade 只在 leadership 期间监听，所以这个探针
-          # 通过就意味着本实例在服务。RollingUpdate 时新实例在拿到租约前 NotReady →
-          # Service 不会把执行 Pod 的请求路由给它（否则那些 job 会因为"这个实例不认识它的
-          # assignment"拿到 401）。故意不配 liveness：drain 期间进程要一直活着把它手上的 job 服务完。
+          # readiness = "facade 已在监听"。服务是无状态的（facade 按 assignment 的 Secret
+          # 解析每条 job），所以任何实例都能服务任何执行 Pod，探针通过即可接流量。
+          # 故意不配 liveness：drain 期间进程要一直活着把它手上的 job 服务完。
           readinessProbe:
             tcpSocket: { port: 8080 }
             periodSeconds: 5

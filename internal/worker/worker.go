@@ -55,10 +55,12 @@ type Worker struct {
 	inFlight   map[string]inFlightJob
 }
 
-// inFlightJob is one running job's cancel handle and the assignment it reports to.
+// inFlightJob is one running job: how to cancel it, and the capability that
+// identifies its assignment (the drain reads that assignment's activity, which may
+// have been recorded by a different instance).
 type inFlightJob struct {
-	cancel func()
-	a      *facade.Assignment
+	cancel     context.CancelFunc // nil for a job adopted from a predecessor
+	capability string
 }
 
 // Running reports how many jobs this worker currently has in flight. Callers
@@ -71,27 +73,49 @@ func (w *Worker) Running() int64 { return w.running.Load() }
 // instance calls it so a wedged job cannot hold the drain (and the rollout behind
 // it) until the full shutdown timeout. Jobs that are still reporting are left
 // alone: drain keeps its promise not to cut healthy work short.
-func (w *Worker) CancelSilentJobs(silence time.Duration) int {
+func (w *Worker) CancelSilentJobs(ctx context.Context, silence time.Duration) int {
 	w.inFlightMu.Lock()
 	defer w.inFlightMu.Unlock()
 	n := 0
 	for id, j := range w.inFlight {
-		if idle := j.a.IdleFor(); idle >= silence {
-			log.Printf("worker %v: job %s 静默 %s（drain 中），判定卡死并取消", w.pool.Labels, id, idle.Round(time.Second))
-			j.cancel()
-			n++
+		idle := w.facade.IdleFor(ctx, j.capability)
+		if idle == 0 || idle < silence {
+			continue // 没观察到活动就不动它：宁可多等，也不能砍掉还在干活的 job
 		}
+		log.Printf("worker %v: job %s 静默 %s（drain 中），判定卡死并取消", w.pool.Labels, id, idle.Round(time.Second))
+		if j.cancel != nil {
+			j.cancel()
+		} else {
+			// 接管的 job 没有本地 ctx：直接删 pod（报失败由 lifecycle 的接管路径负责）
+			w.deletePod(id)
+		}
+		n++
 	}
 	return n
 }
 
-func (w *Worker) trackInFlight(id string, cancel context.CancelFunc, a *facade.Assignment) {
+// Adopt tracks a job started by a predecessor so the drain can wait for it (and
+// cut it loose if it goes quiet). The assignment itself needs no registration: any
+// instance resolves it from its Secret.
+func (w *Worker) Adopt(id, capability string) {
+	w.trackInFlight(id, nil, capability)
+}
+
+func (w *Worker) deletePod(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := w.exec.Delete(ctx, id); err != nil {
+		log.Printf("worker %v: delete adopted executor %s: %v", w.pool.Labels, id, err)
+	}
+}
+
+func (w *Worker) trackInFlight(id string, cancel context.CancelFunc, capability string) {
 	w.inFlightMu.Lock()
 	defer w.inFlightMu.Unlock()
 	if w.inFlight == nil {
 		w.inFlight = map[string]inFlightJob{}
 	}
-	w.inFlight[id] = inFlightJob{cancel: cancel, a: a}
+	w.inFlight[id] = inFlightJob{cancel: cancel, capability: capability}
 }
 
 func (w *Worker) untrackInFlight(id string) {
@@ -177,11 +201,10 @@ func (w *Worker) run(ctx context.Context, cancelJob context.CancelFunc, t *runne
 		log.Printf("worker %v: job %s (%s) builds an image → Pod 里加 kaniko 容器", w.pool.Labels, id, job)
 	}
 
+	// capability 是这条 assignment 的凭据，随它的 Secret 一起落盘；任何实例都能
+	// 据此解析出这条 job（见 facade.K8sResolver），所以本进程不再持有 assignment。
 	capability := randomCapability()
-	a := facade.NewAssignment(t, capability, w.client)
-	w.facade.Add(a)
-	defer w.facade.Remove(capability)
-	w.trackInFlight(id, cancelJob, a)
+	w.trackInFlight(id, cancelJob, capability)
 	defer w.untrackInFlight(id)
 
 	if err := w.exec.Start(ctx, executor.Spec{
@@ -190,6 +213,8 @@ func (w *Worker) run(ctx context.Context, cancelJob context.CancelFunc, t *runne
 		Labels:                w.pool.Labels,
 		Capability:            capability,
 		ControllerURL:         w.cfg.ControllerURL,
+		Task:                  t,
+		PoolKey:               w.cfg.PoolStateKey(w.pool),
 		Resources:             resources(w.pool.Resources),
 		ImagePullSecret:       w.cfg.ImagePullSecret,
 		RunnerConfig:          w.cfg.CacheConfigYAML(),
@@ -216,15 +241,15 @@ func (w *Worker) run(ctx context.Context, cancelJob context.CancelFunc, t *runne
 		}
 	}()
 
-	// Wait for the executor to report a terminal state. A pod that dies without
-	// reporting (OOMKilled, evicted) would otherwise leave the slot occupied and
-	// the task stuck until Gitea's own timeout, so watch the pod too.
+	// Wait for the executor pod to reach a terminal phase. The pod's runner exits
+	// after its one job, so the pod itself is the completion signal — and watching
+	// it (rather than an in-process assignment) is what lets any instance serve it.
+	// A pod that dies without reporting (OOMKilled, evicted) would otherwise leave
+	// the slot occupied and the task stuck until Gitea's own timeout.
 	watch := time.NewTicker(podWatchInterval)
 	defer watch.Stop()
 	for {
 		select {
-		case <-a.Done():
-			return
 		case <-ctx.Done():
 			w.fail(ctx, t.Id, id, "cut short by shutdown")
 			return
@@ -237,8 +262,12 @@ func (w *Worker) run(ctx context.Context, cancelJob context.CancelFunc, t *runne
 			if phase == corev1.PodSucceeded || phase == corev1.PodFailed || phase == "" {
 				// Give the last report a moment to arrive before deciding it never will.
 				select {
-				case <-a.Done():
+				case <-ctx.Done():
+					w.fail(ctx, t.Id, id, "cut short by shutdown")
 				case <-time.After(reportGrace):
+					if w.facade.Reported(ctx, capability) {
+						return
+					}
 					if why := w.exec.StartFailure(ctx, id); why != "" {
 						w.fail(ctx, t.Id, id, "executor 无法启动: "+why)
 					} else {
