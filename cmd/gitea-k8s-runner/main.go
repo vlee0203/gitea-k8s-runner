@@ -136,7 +136,20 @@ func lead(cfg *config.Config, sc scope.Scope, cs kubernetes.Interface, leaderCtx
 	defer cancelJobs()
 
 	store := state.New(cs, sc.ExecutorNamespace(), cfg.StateSecretName)
-	exec := executor.New(cs, sc.ExecutorNamespace())
+
+	// 执行 Pod 要信任的那份 CA：controller 从自己挂着的信任材料里读 —— 挂的是 Secret 还是
+	// ConfigMap、key 叫什么名字都不关我们的事，只认这个路径。配了却读不到就起不来，否则会
+	// 一路静默，直到 workflow 某一步才炸 TLS。
+	var caPEM []byte
+	if cfg.ExecutorCAPath != "" {
+		pem, err := config.ReadCA(cfg.ExecutorCAPath)
+		if err != nil {
+			fatal("EXECUTOR_CA_PATH %s: %v", cfg.ExecutorCAPath, err)
+		}
+		caPEM = pem
+		log.Printf("executor pods will trust the CA read from %s (%d bytes)", cfg.ExecutorCAPath, len(pem))
+	}
+	exec := executor.New(cs, sc.ExecutorNamespace(), caPEM)
 	// 池身份表：facade 解析一条 assignment 时要用它把回报交给"领取它的那个 runner"。
 	// 每个实例都持有全部池的身份（同一份 pools 配置），所以任何实例都能服务任何 job。
 	poolClients := map[string]*giteaclient.Client{}

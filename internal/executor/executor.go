@@ -53,30 +53,50 @@ const (
 	// caBundleDir is where the combined bundle lands, in every container.
 	caBundleDir  = "/etc/gkr-ca"
 	caBundleFile = caBundleDir + "/ca-certificates.crt"
-	caSecretVol  = "gkr-ca-source"
-	caBundleVol  = "gkr-ca-bundle"
+	// caSourceDir is where the CA Secret is mounted for the init container.
+	caSourceDir = "/gkr-ca-source"
+	caSecretVol = "gkr-ca-source"
+	caBundleVol = "gkr-ca-bundle"
+	// caCrtKey is the key *we* store the CA under in the assignment Secret we
+	// create. It is our own contract, on our own object — nobody else's Secret has
+	// to name anything a particular way.
+	caCrtKey = "ca.crt"
 )
+
+// caBundleScript builds the pod's trust store: the mounted CA files concatenated
+// onto the image's own roots.
+//
+// It globs the source directory rather than naming a file: the mounted object is
+// ours to shape, but a directory walk keeps the script honest even if that ever
+// changes (and costs nothing).
+const caBundleScript = `out=` + caBundleFile + `
+: > "$out"
+for f in /etc/ssl/certs/ca-certificates.crt ` + caSourceDir + `/*; do
+  [ -f "$f" ] && cat "$f" >> "$out"
+done
+[ -s "$out" ] || { echo "no CA material: no file in ` + caSourceDir + ` and no image roots" >&2; exit 1; }`
 
 // injectCA makes a pod trust a CA (e.g. an intranet Gitea with a self-signed
 // certificate) without baking it into any image: an init container concatenates
 // the image's own roots with the CA, and every container reads that bundle through
 // the variable each toolchain actually honours — Go (kaniko), OpenSSL/curl/git,
 // Node (JS actions) and Python all differ here.
+//
+// secretName is the assignment's own Secret, which already carries the CA under
+// caCrtKey: the pod depends on nothing the operator mounted for the controller.
 func injectCA(ps *corev1.PodSpec, secretName, image string) {
 	ps.Volumes = append(ps.Volumes,
 		corev1.Volume{Name: caSecretVol, VolumeSource: corev1.VolumeSource{
 			Secret: &corev1.SecretVolumeSource{SecretName: secretName,
-				Items: []corev1.KeyToPath{{Key: "ca.crt", Path: "ca.crt"}}}}},
+				Items: []corev1.KeyToPath{{Key: caCrtKey, Path: caCrtKey}}}}},
 		corev1.Volume{Name: caBundleVol, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 	)
 	ps.InitContainers = append(ps.InitContainers, corev1.Container{
 		Name: "ca-bundle", Image: image, ImagePullPolicy: corev1.PullIfNotPresent,
-		Command: []string{"sh", "-c",
-			"cat /etc/ssl/certs/ca-certificates.crt /gkr-ca-source/ca.crt > /gkr-ca-bundle/ca-certificates.crt 2>/dev/null" +
-				" || cp /gkr-ca-source/ca.crt /gkr-ca-bundle/ca-certificates.crt"},
+		Command: []string{"sh", "-c", caBundleScript},
 		VolumeMounts: []corev1.VolumeMount{
-			{Name: caSecretVol, MountPath: "/gkr-ca-source", ReadOnly: true},
-			{Name: caBundleVol, MountPath: "/gkr-ca-bundle"},
+			{Name: caSecretVol, MountPath: caSourceDir, ReadOnly: true},
+			{Name: caBundleVol, MountPath: caBundleDir},
 		},
 	})
 	env := []corev1.EnvVar{
@@ -126,14 +146,8 @@ type Spec struct {
 	// Task and PoolKey are persisted into the assignment Secret so that any
 	// controller instance can serve this job, and so a successor can adopt it.
 	// PoolKey says whose runner identity reports it back to Gitea.
-	Task    *runnerv1.Task
-	PoolKey string
-	// CASecret, when set, names a Secret (key "ca.crt") whose CA the pod must trust.
-	// The controller reads it and points every container at a bundle of that CA plus
-	// the image's own roots (see injectCA), so jobs can reach a self-signed Gitea —
-	// pushing images to its registry, fetching actions from it — without baking a CA
-	// into any image.
-	CASecret  string
+	Task      *runnerv1.Task
+	PoolKey   string
 	Resources corev1.ResourceRequirements
 	// ImagePullSecret, when set, is used to pull the executor image.
 	ImagePullSecret string
@@ -175,11 +189,16 @@ type Spec struct {
 type Manager struct {
 	cs        kubernetes.Interface
 	namespace string
+	// ca is the CA every executor pod is made to trust, read at startup from
+	// wherever the controller itself has it mounted (config.ExecutorCAPath). Nil
+	// means pods trust only the roots their images carry.
+	ca []byte
 }
 
-// New returns a Manager operating in namespace.
-func New(cs kubernetes.Interface, namespace string) *Manager {
-	return &Manager{cs: cs, namespace: namespace}
+// New returns a Manager operating in namespace. ca, when non-nil, is handed to
+// every executor pod as extra trust material.
+func New(cs kubernetes.Interface, namespace string, ca []byte) *Manager {
+	return &Manager{cs: cs, namespace: namespace, ca: ca}
 }
 
 // PodName returns the pod/secret name for a spec: a readable, DNS-safe variant
@@ -374,6 +393,12 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 		Type:       corev1.SecretTypeOpaque,
 		StringData: data,
 	}
+	// 执行 Pod 要信任的 CA 就放这条 assignment 自己的 Secret（本来就要建）：Pod 因此不引用
+	// 操作员挂在 controller 上的那个对象 —— 是 Secret 还是 ConfigMap、key 叫什么，都与它无关。
+	// 走 Data 而不是 StringData：CA 是字节，没必要经字符串转换。
+	if len(m.ca) > 0 {
+		secret.Data = map[string][]byte{caCrtKey: m.ca}
+	}
 	if _, err := m.cs.CoreV1().Secrets(m.namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create capability secret: %w", err)
 	}
@@ -478,18 +503,13 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 			Volumes:               volumes,
 		},
 	}
-	if s.CASecret != "" {
+	if len(m.ca) > 0 {
+		// 用 runner 镜像跑这个 init 容器（injectRunner 的池，主容器可能不是它）
 		caImage := s.RunnerImage
 		if caImage == "" {
 			caImage = s.Image
 		}
-		if sec, err := m.cs.CoreV1().Secrets(m.namespace).Get(ctx, s.CASecret, metav1.GetOptions{}); err != nil {
-			log.Printf("executor: read CA secret %s: %v（这个 job 的 Pod 不会信任自签 Gitea）", s.CASecret, err)
-		} else if pem := sec.Data["ca.crt"]; len(pem) == 0 {
-			log.Printf("executor: CA secret %s has no ca.crt（这个 job 的 Pod 不会信任自签 Gitea）", s.CASecret)
-		} else {
-			injectCA(&pod.Spec, s.CASecret, caImage)
-		}
+		injectCA(&pod.Spec, name, caImage)
 	}
 	if _, err := m.cs.CoreV1().Pods(m.namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create executor pod: %w", err)

@@ -238,7 +238,6 @@ func (w *Worker) run(ctx context.Context, cancelJob context.CancelFunc, t *runne
 		ControllerURL:         w.cfg.ControllerURL,
 		Task:                  t,
 		PoolKey:               w.cfg.PoolStateKey(w.pool),
-		CASecret:              w.cfg.ExecutorCASecret,
 		Resources:             resources(w.pool.Resources),
 		ImagePullSecret:       w.cfg.ImagePullSecret,
 		RunnerConfig:          w.cfg.CacheConfigYAML(),

@@ -123,22 +123,24 @@ kubectl -n <gitea-ns> set env sts/<gitea> \
 | --- | --- | --- |
 | **controller** | **Gitea（https）**：注册 runner、facade 反向代理到真实 Gitea | **要** |
 | 执行 Pod 里的 runner / `actions/checkout` | 集群内的 **facade（明文 http）** | 不要 |
-| kaniko 旁路容器 | 构建上下文是**本地目录**（`dir://`），不连 Gitea；**但**workflow 若往自签的 Gitea registry 推镜像，它就要 | 推镜像时才要（由 `EXECUTOR_CA_SECRET` 注入 CA 解决，不必烧镜像）|
-| workflow 里直接访问 Gitea API 的步骤 | Gitea（https） | 要（同上，`EXECUTOR_CA_SECRET` 注入即覆盖） |
+| kaniko 旁路容器 | 构建上下文是**本地目录**（`dir://`），不连 Gitea；**但**workflow 若往自签的 Gitea registry 推镜像，它就要 | 推镜像时才要（由 `EXECUTOR_CA_PATH` 注入 CA 解决，不必烧镜像）|
+| workflow 里直接访问 Gitea API 的步骤 | Gitea（https） | 要（同上，`EXECUTOR_CA_PATH` 注入即覆盖） |
 
 依据：执行 Pod 里的 `CONTROLLER_URL` 指向 **controller 自己**（`internal/executor/executor.go` 里
 `{Name: "CONTROLLER_URL", Value: s.ControllerURL}`，就是集群内的明文 Service），所以 Pod 侧取代码不走
 Gitea；controller 侧全代码没有 `InsecureSkipVerify`，走标准证书校验。
 
-### controller（必需）
+### 一份 CA，两处用途
 
-先明确**需要哪些证书**：客户端要能验通服务端证书的**签发链**，所以需要的是链上的 **中间证书 + 根 CA**；
+先把"需要哪些证书"定下来：客户端要能验通服务端证书的**签发链**，所以需要的是链上的 **中间证书 + 根 CA**；
 **服务端自己的那张（leaf）不需要**（由服务端在握手中给出）。若内网服务端下发的链不完整，把中间证书一并放进
-信任文件即可 —— 两份拼成一个 PEM 最省事：
+信任文件即可 —— 两份拼成一个 PEM 最省事（也可以各自一个 key，见下）。
+
+**只建一个对象**，挂给 controller；执行 Pod 用的是**同一个挂载点** —— 不必为同一份证书再建第二个：
 
 ```bash
 cat middle.crt root-ca.crt > ca-bundle.crt          # 顺序无所谓，都是 PEM 块
-kubectl -n <应用命名空间> create secret generic gitea-ca --from-file=ca.crt=ca-bundle.crt
+kubectl -n <应用命名空间> create secret generic gitea-ca --from-file=corp-ca.crt
 ```
 
 Secret 的形态（要手写就用这个框架，值自己填）：
@@ -151,7 +153,7 @@ metadata:
   namespace: <应用命名空间>
 type: Opaque
 stringData:
-  ca.crt: |
+  corp-ca.crt: |            # key 名随你（就是 --from-file 用到的文件名），代码不认某个固定名字
     -----BEGIN CERTIFICATE-----
     <中间证书 middle>
     -----END CERTIFICATE-----
@@ -160,7 +162,8 @@ stringData:
     -----END CERTIFICATE-----
 ```
 
-然后在 controller 的 Deployment 上加**一处 env + 一个卷 + 一个挂载**（三处，缺一不可）：
+**① controller 自己得先信任它**（否则注册 runner、反代到 Gitea 都过不了 TLS）。加**一处 env + 一个卷 +
+一个挂载**（三处，缺一不可）：
 
 ```yaml
           env:
@@ -171,28 +174,23 @@ stringData:
             - { name: gitea-ca, mountPath: /etc/gkr-ca, readOnly: true }
       volumes:
         - name: gitea-ca
+          # 不写 items：整个 Secret 挂进来、目录下每个文件都会被扫到，key 名不必是 ca.crt
           secret:
-            secretName: gitea-ca      # optional: true 时可先不建，改完再补
-            optional: true
-            items: [{ key: ca.crt, path: ca.crt }]
+            secretName: gitea-ca
 ```
 
-改完重启（`kubectl rollout restart deploy/gitea-k8s-runner`）。为什么只有 controller 需要：执行 Pod 全程只跟
-集群内的 facade 说明文 HTTP（见上一节）。
+**② 执行 Pod 也信任同一份**：把这**同一个挂载点（或其中某个证书文件）的路径**填进 `EXECUTOR_CA_PATH`
+即可（清单里有注释行）。这一行只认路径 —— 挂的是 Secret 还是 ConfigMap、key 叫什么名字，它都不关心：
 
-> **双向 TLS（mTLS）另说**：如果 Gitea 要求客户端出示证书（而不只是你这边验服务端），当前 controller **不支持**
-> ——它只做服务端校验，没有配客户端证书/私钥的入口。那种情况要改代码，告诉我再加。
+```yaml
+            # - { name: EXECUTOR_CA_PATH, value: /etc/gkr-ca }
+            # - { name: EXECUTOR_CA_PATH, value: /etc/gkr-ca/corp-ca.crt }   # 指单个文件也行
+```
 
+controller 建每个执行 Pod 时都会：
 
-
-### 执行 Pod（只在特定场景需要）
-
-正常流量不需要（全程走 facade 明文）。只有这两种情况：① workflow 往自签的 Gitea registry 推镜像
-（kaniko 容器）② workflow 从自签 Gitea 取 action（runner 容器）。
-
-这两种情况**不用烧镜像**：把上面那份 CA Secret 的名字填进 controller 的 `EXECUTOR_CA_SECRET`
-即可（清单里有注释行）。controller 建执行 Pod 时会：
-
+- 把读到的 CA 写进这条 assignment 自己的 Secret（所以 Pod 不引用上面那个对象，也就无所谓它是
+  Secret 还是 ConfigMap、key 叫什么）
 - 加一个 `ca-bundle` init 容器，把**镜像自带的根证书**与该 CA 拼成一个 bundle
 - 给每个容器（runner 与 kaniko）挂载该 bundle，并把各工具链实际认的变量指过去：
   `SSL_CERT_FILE`（Go/kaniko、OpenSSL）、`SSL_CERT_DIR`（双保险）、`CURL_CA_BUNDLE`、`GIT_SSL_CAINFO`、
@@ -200,6 +198,26 @@ stringData:
 
 **注意是"拼接"而不是只指自定义 CA**：这些变量都是替换语义，只给自定义 CA 会把公网根证书顶掉，
 Pod 里再访问任何公网 https 就废了。
+
+**`EXECUTOR_CA_PATH` 是"配了就必须能读到"**：路径不存在、是空目录、或文件里没有 PEM，controller
+**直接起不来**（日志里写清原因）—— 故意的，否则那份 CA 会一路静默不生效，只在 workflow 某一步炸 TLS。
+所以别一边给这个卷写 `optional: true` 一边打开这一项。
+
+改完重启（`kubectl rollout restart deploy/gitea-k8s-runner`）。
+
+> **双向 TLS（mTLS）另说**：如果 Gitea 要求客户端出示证书（而不只是你这边验服务端），当前 controller **不支持**
+> ——它只做服务端校验，没有配客户端证书/私钥的入口。那种情况要改代码，告诉我再加。
+
+### 什么时候才需要 ② 这一步
+
+正常流量不需要：执行 Pod 全程只跟集群内的 facade 说明文 http（`CONTROLLER_URL` 就是集群内的 Service），
+action 下载与 checkout 也走它。只有这两种情况要执行 Pod 自己信任 Gitea：
+
+- workflow 往**自签的 Gitea registry 推镜像**（kaniko 容器）
+- workflow 里**直接访问 Gitea 的 https**（例如直连 Gitea API，而不是用平台注入的地址）
+
+排查时先分清是哪一侧报的：controller 侧报 = ① 的卷/`SSL_CERT_DIR` 没配；执行 Pod 侧报 = ② 没配，
+或者 `EXECUTOR_CA_PATH` 指的那个路径与 ① 挂的不是同一份。
 
 ## 五、集群前置条件
 
@@ -243,7 +261,7 @@ Pod 里再访问任何公网 https 就废了。
 | --- | --- |
 | job 秒失败，报 `git clone … /<owner>/<repo>` | 目标实例缺这个 action 仓库（第二节没搬，或没搬你要用的 ref） |
 | `ImagePullBackOff` / `ErrImagePull` | 镜像没搬进内网仓库，或清单里地址没改全，或私有仓库缺 pull secret |
-| `x509: certificate signed by unknown authority` | 第四节：Gitea 用私 CA。controller 报 = 没挂 CA；执行 Pod 报 = 那个容器（runner 直连 API / kaniko 推镜像）用了没带 CA 的镜像 |
+| `x509: certificate signed by unknown authority` | 第四节：Gitea 用私 CA。controller 报 = 它的卷/`SSL_CERT_DIR` 没配；执行 Pod 报（kaniko 推镜像 / workflow 直连 Gitea API）= `EXECUTOR_CA_PATH` 没配，或它指的路径与 ① 挂的不是同一份 |
 | Pod 被驱逐，`exceeded its local ephemeral storage limit` | 命名空间 LimitRange 的默认值太小，池里没显式给 `ephemeralStorage` |
 | `cache` Deployment 一直 Pending | 没有可用 StorageClass（`cache.yaml` 是可选组件，直接跳过） |
 | workflow 里 `docker build` 卡住/找不到 kaniko | `KANIKO_IMAGE` 没换成内网地址 |
@@ -255,13 +273,14 @@ Pod 里再访问任何公网 https 就废了。
 - **执行 Pod 与 controller 同命名空间**：`SCOPE=namespace`，`TARGET_NAMESPACE` 用 fieldRef 取自己，
   这样只需要该命名空间的 RBAC，不需要集群级权限。
 - **服务名用模板变量**：`CONTROLLER_URL` 要指向本应用自己的 Service（`http://<app_name>:8080`）。
-- **自定义 CA 不在模板里**（模板不替环境做决定）：自签证书时按需加一处 env + 一个卷 —— 具体加法在
-  实际部署时确定（挂载点 `/etc/gkr-ca` + `SSL_CERT_DIR=/etc/ssl/certs:/etc/gkr-ca`，已验证：CA 在则
-  自签证书被信任、CA 不在则公网证书照常可信）。
-- **执行 Pod 不需要 CA**（只跟集群内 facade 说 http），所以模板里只给 controller 装。
+- **自定义 CA 不在模板里建**（模板不替环境做决定）：自签证书时按第四节加 —— controller 挂一份
+  （`/etc/ssl/certs:/etc/gkr-ca` 已验证：CA 在则自签证书被信任、CA 不在则公网证书照常可信），
+  执行 Pod 侧只填 `EXECUTOR_CA_PATH` 指向**同一个挂载点**，模板里不建第二个对象。
+- **执行 Pod 只在两种情况下需要 CA**（workflow 往自签 registry 推镜像 / 直接访问 Gitea 的 https）；
+  正常流量全程只跟集群内的 facade 说明文 http。模板里两处都留注释，由部署时决定。
 - **镜像**：模板里钉不可变引用（`sha-<sha>` 标签或摘要），别钉 `latest`；内网填内网仓库地址。
 - **资源基线**：controller `limits 500m/1Gi`、`requests 50m/100Mi`，`revisionHistoryLimit: 1`，
-  `imagePullPolicy: IfNotPresent`；controller 需要 k8s API，用
-  `automountServiceAccountToken: false` + 投射令牌卷（token + `kube-root-ca.crt` + namespace）。
+  `imagePullPolicy: IfNotPresent`；controller 需要 k8s API，靠
+  `automountServiceAccountToken: true`（用默认注入的 SA 令牌，不另配投射卷）。
 - 打包成集群镜像：用 sealos-templates 仓库的 `scripts/build-cluster-image.sh <index.yaml> <镜像名>:<tag>`。
 

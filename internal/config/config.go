@@ -76,12 +76,14 @@ type Config struct {
 	// ShutdownTimeout is how long in-flight jobs may drain before they are
 	// cancelled. Must not exceed the pod's terminationGracePeriodSeconds.
 	ShutdownTimeout time.Duration
-	// ExecutorCASecret names a Secret (key "ca.crt") with a CA the executor pods
-	// must trust — an intranet Gitea with a self-signed certificate, say. The
-	// controller bundles it with the image's own roots and points every job pod at
-	// the result, so a workflow can push images to / fetch actions from that Gitea
-	// without the CA being baked into any image.
-	ExecutorCASecret string
+	// ExecutorCAPath, when set, is where the controller reads the CA its executor
+	// pods must trust — a PEM file, or a directory of them, i.e. simply the mount
+	// point of whatever was given to the controller (a Secret, a ConfigMap, our
+	// business is only that the file is there). The controller hands it to every
+	// job pod as a bundle with the image's own roots (see executor), so a workflow
+	// can push images to / fetch actions from a self-signed Gitea without the CA
+	// being baked into any image.
+	ExecutorCAPath string
 	// DrainSilence is how long an in-flight job may go without talking to the
 	// facade during a drain before it is treated as wedged and cancelled. Keeps a
 	// hung job from holding the drain (and the rollout behind it) for the whole
@@ -114,7 +116,7 @@ func Load() (*Config, error) {
 		RunnerImage:             env("RUNNER_IMAGE", ""),
 		KanikoImage:             env("KANIKO_IMAGE", "ghcr.io/osscontainertools/kaniko:v1.28.6-debug"),
 		RegistrationTokenSecret: env("REGISTRATION_TOKEN_SECRET", ""),
-		ExecutorCASecret:        env("EXECUTOR_CA_SECRET", ""),
+		ExecutorCAPath:          env("EXECUTOR_CA_PATH", ""),
 		ShutdownTimeout:         30 * time.Minute,
 		DrainSilence:            10 * time.Minute,
 	}
