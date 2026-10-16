@@ -11,9 +11,9 @@ func TestPodName(t *testing.T) {
 		spec Spec
 		want string
 	}{
-		{"id only", Spec{AssignmentID: "16"}, "gitea-runner-16"},
-		{"repo and job", Spec{AssignmentID: "16", Repo: "volcano/ci-test", Job: "hello"}, "gitea-runner-volcano-ci-test-hello-16"},
-		{"weird characters are slugged", Spec{AssignmentID: "7", Repo: "A/B_c.d", Job: "build:linux"}, "gitea-runner-a-b-c-d-build-linux-7"},
+		{"id only", Spec{AssignmentID: "16"}, "grc-16"},
+		{"repo and job", Spec{AssignmentID: "16", Repo: "volcano/ci-test", Job: "hello"}, "grc-volcano-ci-test-hello-16"},
+		{"weird characters are slugged", Spec{AssignmentID: "7", Repo: "A/B_c.d", Job: "build:linux"}, "grc-a-b-c-d-build-linux-7"},
 	}
 	for _, tc := range cases {
 		if got := PodName(tc.spec); got != tc.want {

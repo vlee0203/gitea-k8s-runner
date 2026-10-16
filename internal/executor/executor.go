@@ -25,13 +25,13 @@ import (
 // for finding our resources; annotations carry the human context.
 const (
 	ManagedByLabel    = "app.kubernetes.io/managed-by"
-	ManagedByValue    = "gitea-k8s-runner"
-	AssignmentIDLabel = "gitea-k8s-runner/assignment"
+	ManagedByValue    = "gitea-runner-controller"
+	AssignmentIDLabel = "gitea-runner-controller/assignment"
 
-	RepoAnnotation     = "gitea-k8s-runner/repository"
-	RunIDAnnotation    = "gitea-k8s-runner/run-id"
-	JobAnnotation      = "gitea-k8s-runner/job"
-	WorkflowAnnotation = "gitea-k8s-runner/workflow"
+	RepoAnnotation     = "gitea-runner-controller/repository"
+	RunIDAnnotation    = "gitea-runner-controller/run-id"
+	JobAnnotation      = "gitea-runner-controller/job"
+	WorkflowAnnotation = "gitea-runner-controller/workflow"
 )
 
 // Secret keys: the assignment capability, and an optional runner config file.
@@ -45,18 +45,18 @@ const (
 	PoolKeyKey    = "poolKey" // which pool's runner identity claimed this task
 	// CapabilityHashLabel lets the facade find this Secret from the capability
 	// alone (the capability is a 256-bit bearer; its hash is not reversible).
-	CapabilityHashLabel = "gitea-k8s-runner/capability-hash"
+	CapabilityHashLabel = "gitea-runner-controller/capability-hash"
 )
 
 // CA bundle plumbing for executor pods.
 const (
 	// caBundleDir is where the combined bundle lands, in every container.
-	caBundleDir  = "/etc/gkr-ca"
+	caBundleDir  = "/etc/grc-ca"
 	caBundleFile = caBundleDir + "/ca-certificates.crt"
 	// caSourceDir is where the CA Secret is mounted for the init container.
-	caSourceDir = "/gkr-ca-source"
-	caSecretVol = "gkr-ca-source"
-	caBundleVol = "gkr-ca-bundle"
+	caSourceDir = "/grc-ca-source"
+	caSecretVol = "grc-ca-source"
+	caBundleVol = "grc-ca-bundle"
 	// caCrtKey is the key *we* store the CA under in the assignment Secret we
 	// create. It is our own contract, on our own object — nobody else's Secret has
 	// to name anything a particular way.
@@ -131,7 +131,7 @@ func withHashLabel(labels map[string]string, capability string) map[string]strin
 }
 
 // namePrefix starts every executor pod/secret name.
-const namePrefix = "gitea-runner"
+const namePrefix = "grc"
 
 // maxNameLen is the DNS label limit.
 const maxNameLen = 63
@@ -284,26 +284,26 @@ if [ -n "$CONFIG_FILE" ]; then CFG="--config=$CONFIG_FILE"; fi
 # The injected-into image may have neither /tmp nor $HOME; the runner volume
 # always exists and is writable. cd before registering: register writes .runner
 # into the working directory and daemon reads it back from the same place.
-cd /opt/gkr
-TOKEN=$(cat /etc/gkr/` + CapabilityKey + `)
-/opt/gkr/gitea-runner register --instance "$CONTROLLER_URL" --token "$TOKEN" \
+cd /opt/grc
+TOKEN=$(cat /etc/grc/` + CapabilityKey + `)
+/opt/grc/gitea-runner register --instance "$CONTROLLER_URL" --token "$TOKEN" \
   --name "$GITEA_RUNNER_NAME" --labels "$GITEA_RUNNER_LABELS" --ephemeral --no-interactive $CFG
 # docker 替身放进 PATH（injectRunner 池的镜像里没有它）
-[ -x /opt/gkr/docker ] && cp /opt/gkr/docker /usr/local/bin/docker 2>/dev/null || true
-exec /opt/gkr/gitea-runner daemon --once --labels "$GITEA_RUNNER_LABELS" $CFG
+[ -x /opt/grc/docker ] && cp /opt/grc/docker /usr/local/bin/docker 2>/dev/null || true
+exec /opt/grc/gitea-runner daemon --once --labels "$GITEA_RUNNER_LABELS" $CFG
 `
 
 // injectRunnerScript copies the binary out of the runner image and writes the
 // entrypoint above next to it.
-var injectRunnerScript = "cp /usr/local/bin/gitea-runner /opt/gkr/gitea-runner" +
-	" && chmod +x /opt/gkr/gitea-runner" +
+var injectRunnerScript = "cp /usr/local/bin/gitea-runner /opt/grc/gitea-runner" +
+	" && chmod +x /opt/grc/gitea-runner" +
 	// 顺带把 `docker` 替身也带过去：injectRunner 的池子主容器不是 runner 镜像，没有它
-	" && { cp /usr/local/bin/docker /opt/gkr/docker 2>/dev/null && chmod +x /opt/gkr/docker || true; }" +
-	" && cat > /opt/gkr/entrypoint.sh <<'GKR_ENTRYPOINT'\n" + injectedEntrypoint + "GKR_ENTRYPOINT\n" +
+	" && { cp /usr/local/bin/docker /opt/grc/docker 2>/dev/null && chmod +x /opt/grc/docker || true; }" +
+	" && cat > /opt/grc/entrypoint.sh <<'GRC_ENTRYPOINT'\n" + injectedEntrypoint + "GRC_ENTRYPOINT\n" +
 	// The chmod must start its own line: a line cannot begin with "&&" after a
 	// heredoc, which is a shell syntax error (that failed the init container and
 	// killed the pod before the runner ever started).
-	"chmod +x /opt/gkr/entrypoint.sh"
+	"chmod +x /opt/grc/entrypoint.sh"
 
 const (
 	// runnerContainer is the container whose exit decides the job's outcome. A
@@ -415,7 +415,7 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 		//     （"instance address is empty"）→ job 永不开始、没有任何日志、Pod 也不退出。
 		{Name: "GITEA_INSTANCE_URL", Value: s.ControllerURL},
 		{Name: "CONTROLLER_URL", Value: s.ControllerURL},
-		{Name: "GITEA_RUNNER_REGISTRATION_TOKEN_FILE", Value: "/etc/gkr/" + CapabilityKey},
+		{Name: "GITEA_RUNNER_REGISTRATION_TOKEN_FILE", Value: "/etc/grc/" + CapabilityKey},
 		{Name: "GITEA_RUNNER_LABELS", Value: strings.Join(s.Labels, ",")},
 		{Name: "GITEA_RUNNER_NAME", Value: runnerName(s)},
 		{Name: "GITEA_RUNNER_EPHEMERAL", Value: "true"},
@@ -425,7 +425,7 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 		{Name: "GITEA_MAX_REG_ATTEMPTS", Value: "30"},
 	}
 	if s.RunnerConfig != "" {
-		env = append(env, corev1.EnvVar{Name: "CONFIG_FILE", Value: "/etc/gkr/" + ConfigKey})
+		env = append(env, corev1.EnvVar{Name: "CONFIG_FILE", Value: "/etc/grc/" + ConfigKey})
 	}
 
 	env = append(env, proxyEnvVars(s.ProxyEnv)...)
@@ -438,12 +438,12 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 		ImagePullPolicy: corev1.PullAlways,
 		Resources:       s.Resources,
 		Env:             env,
-		VolumeMounts:    []corev1.VolumeMount{{Name: "capability", MountPath: "/etc/gkr", ReadOnly: true}},
+		VolumeMounts:    []corev1.VolumeMount{{Name: "capability", MountPath: "/etc/grc", ReadOnly: true}},
 	}
 	// 构建型 job：runner 与 kaniko 容器共享一个目录，构造请求/日志/退出码都走它。
 	if s.KanikoImage != "" {
 		env = append(env,
-			corev1.EnvVar{Name: "GKR_SHARED", Value: sharedDir},
+			corev1.EnvVar{Name: "GRC_SHARED", Value: sharedDir},
 			// HOME 也放这里：runner 的工作目录与 `actions/checkout` 的工作区都落在共享目录里，
 			// kaniko 容器才看得到构建上下文。
 			corev1.EnvVar{Name: "HOME", Value: sharedDir + "/home"},
@@ -462,10 +462,10 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 		// start it with a POSIX-sh entrypoint that image can execute. HOME is
 		// pointed at the runner volume too: such images often lack /root and
 		// /tmp, and the runner writes state under both.
-		runner.Command = []string{"/opt/gkr/entrypoint.sh"}
-		runner.Env = append(runner.Env, corev1.EnvVar{Name: "HOME", Value: "/opt/gkr"})
+		runner.Command = []string{"/opt/grc/entrypoint.sh"}
+		runner.Env = append(runner.Env, corev1.EnvVar{Name: "HOME", Value: "/opt/grc"})
 		runner.VolumeMounts = append(runner.VolumeMounts,
-			corev1.VolumeMount{Name: injectedRunnerVolume, MountPath: "/opt/gkr"})
+			corev1.VolumeMount{Name: injectedRunnerVolume, MountPath: "/opt/grc"})
 		volumes = append(volumes, corev1.Volume{
 			Name:         injectedRunnerVolume,
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
@@ -475,7 +475,7 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 			Image:           s.RunnerImage,
 			ImagePullPolicy: corev1.PullAlways,
 			Command:         []string{"sh", "-c", injectRunnerScript},
-			VolumeMounts:    []corev1.VolumeMount{{Name: injectedRunnerVolume, MountPath: "/opt/gkr"}},
+			VolumeMounts:    []corev1.VolumeMount{{Name: injectedRunnerVolume, MountPath: "/opt/grc"}},
 		}}
 	}
 	if s.KanikoImage != "" {

@@ -42,7 +42,7 @@ import (
 // each pool has exactly one identity. Serving is not exclusive — the facade
 // resolves every call from the assignment's Secret, so any instance (including a
 // fresh replacement) can serve any pod.
-const leaseName = "gitea-k8s-runner"
+const leaseName = "gitea-runner-controller"
 
 // drainSweepInterval is how often a draining leader re-checks whether any of its
 // in-flight jobs has gone quiet long enough to be considered wedged.

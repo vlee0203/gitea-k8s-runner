@@ -27,7 +27,7 @@ func TestCAIsHandedOverInTheAssignmentsOwnSecret(t *testing.T) {
 
 	if err := m.Start(context.Background(), Spec{
 		AssignmentID: "1", Image: "runner:test", Capability: "cap-1",
-		ControllerURL: "http://gitea-k8s-runner:8080", Task: &runnerv1.Task{Id: 1},
+		ControllerURL: "http://gitea-runner-controller:8080", Task: &runnerv1.Task{Id: 1},
 		PoolKey: "pool", KanikoImage: "kaniko:test",
 	}); err != nil {
 		t.Fatalf("Start: %v", err)

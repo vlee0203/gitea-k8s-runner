@@ -6,7 +6,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: gitea-runner-cache-config
+  name: gitea-runner-controller-cache-config
 data:
   # cache-server 的全部参数都在这里（命令行上不带参数）。密钥换成 openssl rand -hex 32。
   config.yaml: |
@@ -19,7 +19,7 @@ data:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: gitea-runner-cache
+  name: gitea-runner-controller-cache
 spec:
   accessModes: ["ReadWriteOnce"]
   resources:
@@ -29,17 +29,17 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: gitea-runner-cache
+  name: gitea-runner-controller-cache
 spec:
   replicas: 1
   revisionHistoryLimit: 1
   strategy:
     type: Recreate
   selector:
-    matchLabels: { app: gitea-runner-cache }
+    matchLabels: { app: gitea-runner-controller-cache }
   template:
     metadata:
-      labels: { app: gitea-runner-cache }
+      labels: { app: gitea-runner-controller-cache }
     spec:
       # cache-server 不调 K8s API；不写这行的话默认会挂一个用不到的 default SA 令牌
       automountServiceAccountToken: false
@@ -69,15 +69,15 @@ spec:
             - { name: config, mountPath: /etc/cache, readOnly: true }
       volumes:
         - name: config
-          configMap: { name: gitea-runner-cache-config }
+          configMap: { name: gitea-runner-controller-cache-config }
         - name: cache
-          persistentVolumeClaim: { claimName: gitea-runner-cache }
+          persistentVolumeClaim: { claimName: gitea-runner-controller-cache }
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: gitea-runner-cache
+  name: gitea-runner-controller-cache
 spec:
-  selector: { app: gitea-runner-cache }
+  selector: { app: gitea-runner-controller-cache }
   ports:
     - { name: http, port: 8088, targetPort: http }

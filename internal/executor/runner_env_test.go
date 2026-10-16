@@ -20,7 +20,7 @@ import (
 func TestPodCarriesBothTheStockAndOurInstanceEnv(t *testing.T) {
 	cs := fake.NewSimpleClientset()
 	m := New(cs, "ns", nil)
-	const url = "http://gitea-k8s-runner:8080"
+	const url = "http://gitea-runner-controller:8080"
 
 	if err := m.Start(context.Background(), Spec{
 		AssignmentID: "1", Image: "runner:test", Capability: "cap-1",

@@ -169,9 +169,9 @@ stringData:
           env:
             # Go 标准库同时扫这些目录；目录不存在也不影响公网证书（已实测正反对照）
             - name: SSL_CERT_DIR
-              value: /etc/ssl/certs:/etc/gkr-ca
+              value: /etc/ssl/certs:/etc/grc-ca
           volumeMounts:
-            - { name: gitea-ca, mountPath: /etc/gkr-ca, readOnly: true }
+            - { name: gitea-ca, mountPath: /etc/grc-ca, readOnly: true }
       volumes:
         - name: gitea-ca
           # 不写 items：整个 Secret 挂进来、目录下每个文件都会被扫到，key 名不必是 ca.crt
@@ -183,8 +183,8 @@ stringData:
 即可（清单里有注释行）。这一行只认路径 —— 挂的是 Secret 还是 ConfigMap、key 叫什么名字，它都不关心：
 
 ```yaml
-            # - { name: EXECUTOR_CA_PATH, value: /etc/gkr-ca }
-            # - { name: EXECUTOR_CA_PATH, value: /etc/gkr-ca/corp-ca.crt }   # 指单个文件也行
+            # - { name: EXECUTOR_CA_PATH, value: /etc/grc-ca }
+            # - { name: EXECUTOR_CA_PATH, value: /etc/grc-ca/corp-ca.crt }   # 指单个文件也行
 ```
 
 controller 建每个执行 Pod 时都会：
@@ -203,7 +203,7 @@ Pod 里再访问任何公网 https 就废了。
 **直接起不来**（日志里写清原因）—— 故意的，否则那份 CA 会一路静默不生效，只在 workflow 某一步炸 TLS。
 所以别一边给这个卷写 `optional: true` 一边打开这一项。
 
-改完重启（`kubectl rollout restart deploy/gitea-k8s-runner`）。
+改完重启（`kubectl rollout restart deploy/gitea-runner-controller`）。
 
 > **双向 TLS（mTLS）另说**：如果 Gitea 要求客户端出示证书（而不只是你这边验服务端），当前 controller **不支持**
 > ——它只做服务端校验，没有配客户端证书/私钥的入口。那种情况要改代码，告诉我再加。
@@ -237,7 +237,7 @@ action 下载与 checkout 也走它。只有这两种情况要执行 Pod 自己�
 部署步骤与 `deploy/` 各字段的说明见[部署总览](overview.zh-cn.md)，内网额外确认这几点：
 
 1. `kubectl -n <ns> get pods` —— controller `Running`；**没有** `ImagePullBackOff`（有就是镜像地址没改全）
-2. `kubectl -n <ns> logs deploy/gitea-k8s-runner` —— 出现 `registered worker …` 与 `controller leading: …`
+2. `kubectl -n <ns> logs deploy/gitea-runner-controller` —— 出现 `registered worker …` 与 `controller leading: …`
 3. 内网 Gitea 的 Runners 页面能看到 runner 且 `online`
 4. **跑一个标准的 GitHub workflow 验收**（这一步同时验证 action 搬运）：
 
@@ -276,7 +276,7 @@ action 下载与 checkout 也走它。只有这两种情况要执行 Pod 自己�
   这样只需要该命名空间的 RBAC，不需要集群级权限。
 - **服务名用模板变量**：`CONTROLLER_URL` 要指向本应用自己的 Service（`http://<app_name>:8080`）。
 - **自定义 CA 不在模板里建**（模板不替环境做决定）：自签证书时按第四节加 —— controller 挂一份
-  （`/etc/ssl/certs:/etc/gkr-ca` 已验证：CA 在则自签证书被信任、CA 不在则公网证书照常可信），
+  （`/etc/ssl/certs:/etc/grc-ca` 已验证：CA 在则自签证书被信任、CA 不在则公网证书照常可信），
   执行 Pod 侧只填 `EXECUTOR_CA_PATH` 指向**同一个挂载点**，模板里不建第二个对象。
 - **执行 Pod 只在两种情况下需要 CA**（workflow 往自签 registry 推镜像 / 直接访问 Gitea 的 https）；
   正常流量全程只跟集群内的 facade 说明文 http。模板里两处都留注释，由部署时决定。

@@ -141,12 +141,12 @@ func (r *K8sResolver) stampSecret(ctx context.Context, capability string, at tim
 }
 
 // LastSeenAnnotation records the last time an instance served this assignment.
-const LastSeenAnnotation = "gitea-k8s-runner/last-seen"
+const LastSeenAnnotation = "gitea-runner-controller/last-seen"
 
 // ReportedAnnotation records that the pod reported a terminal result. With the
 // assignment state shared, this is how a worker tells "the job finished" from
 // "the pod died without reporting", without holding the assignment itself.
-const ReportedAnnotation = "gitea-k8s-runner/reported"
+const ReportedAnnotation = "gitea-runner-controller/reported"
 
 // MarkReported stamps a terminal report onto the assignment Secret.
 func (r *K8sResolver) MarkReported(ctx context.Context, capability string) error {

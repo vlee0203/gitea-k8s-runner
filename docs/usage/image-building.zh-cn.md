@@ -55,7 +55,7 @@ buildah 都要挂载文件系统，没有 `CAP_SYS_ADMIN` 干不了）。唯一�
 
 - 它作用在**步骤**上（含 JS action；Node ≥ 20 还需要 `NODE_USE_ENV_PROXY=1` 才会用它）。
 - 构建部分：替身会把本次步骤看到的代理设置**一并转交给 kaniko 容器**，所以拉基础镜像、推镜像也走它。
-  转交时 `NO_PROXY` 取「workflow 那份 + 平台那份（`GKR_PLATFORM_NO_PROXY`）」的**并集**——即使 workflow
+  转交时 `NO_PROXY` 取「workflow 那份 + 平台那份（`GRC_PLATFORM_NO_PROXY`）」的**并集**——即使 workflow
   里漏写集群内地址，也不会把 Gitea / facade 的流量送进代理。
 
 实测（workflow 里把 `HTTPS_PROXY` 指到一个死端口）：

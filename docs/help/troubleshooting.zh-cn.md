@@ -6,7 +6,7 @@ weight: 50
 
 # 排查：症状 → 原因
 
-先看两个地方：**controller 日志**（`kubectl logs deploy/gitea-k8s-runner`）与
+先看两个地方：**controller 日志**（`kubectl logs deploy/gitea-runner-controller`）与
 **Gitea 的 job 日志**（用户在 UI 上看到的那份）。平台把"自己造成"的失败都写进了 job 日志（`##[error]`）。
 
 | 症状 | 常见原因 | 怎么确认/解决 |
@@ -27,13 +27,13 @@ weight: 50
 
 ```bash
 # controller 侧
-kubectl -n <ns> logs deploy/gitea-k8s-runner --tail=200
-kubectl -n <ns> get pods -l app.kubernetes.io/managed-by=gitea-k8s-runner   # 在跑的 executor
+kubectl -n <ns> logs deploy/gitea-runner-controller --tail=200
+kubectl -n <ns> get pods -l app.kubernetes.io/managed-by=gitea-runner-controller   # 在跑的 executor
 kubectl -n <ns> get events --sort-by=.lastTimestamp | tail -30
 
 # job 侧：Gitea UI 的 job 日志；或 API
 #   GET /repos/{owner}/{repo}/actions/jobs/{job_id}/logs
 ```
 
-executor Pod 的命名是 `gitea-runner-<repo>-<job>-<taskid>`，注解里有 repository / run-id / job / workflow，
+executor Pod 的命名是 `grc-<repo>-<job>-<taskid>`，注解里有 repository / run-id / job / workflow，
 `kubectl describe pod` 能直接对上是哪个 job。

@@ -66,7 +66,7 @@ jobs:
       - name: 构建并推送 controller 镜像
         run: |
           docker build --push \
-            -t "$REG/volcano/gitea-k8s-runner/controller:e2e" \
+            -t "$REG/volcano/gitea-runner-controller/controller:e2e" \
             -f container/controller.Dockerfile .
 
       # Gitea 不会把推上去的容器包自动关联到仓库（实测：包的 repository 一直是 null），
@@ -75,8 +75,8 @@ jobs:
       - name: 关联镜像包到本仓库（失败不影响构建）
         run: |
           curl -sf -X POST -u "${{ secrets.REG_USER }}:${{ secrets.REG_PASS }}" \
-            "https://$REG/api/v1/packages/volcano/container/gitea-k8s-runner%2Fcontroller/-/link/gitea-k8s-runner" \
-            && echo "已关联 gitea-k8s-runner/controller" \
+            "https://$REG/api/v1/packages/volcano/container/gitea-runner-controller%2Fcontroller/-/link/gitea-runner-controller" \
+            && echo "已关联 gitea-runner-controller/controller" \
             || echo "关联失败（可能已关联、或凭据没有 write:package），不影响镜像本身"
 
   build-runner:
@@ -99,12 +99,12 @@ jobs:
       - name: 构建并推送 runner 镜像
         run: |
           docker build --push \
-            -t "$REG/volcano/gitea-k8s-runner/runner:e2e" \
+            -t "$REG/volcano/gitea-runner-controller/runner:e2e" \
             -f container/runner.Dockerfile .
 
       - name: 关联镜像包到本仓库（失败不影响构建）
         run: |
           curl -sf -X POST -u "${{ secrets.REG_USER }}:${{ secrets.REG_PASS }}" \
-            "https://$REG/api/v1/packages/volcano/container/gitea-k8s-runner%2Frunner/-/link/gitea-k8s-runner" \
-            && echo "已关联 gitea-k8s-runner/runner" \
+            "https://$REG/api/v1/packages/volcano/container/gitea-runner-controller%2Frunner/-/link/gitea-runner-controller" \
+            && echo "已关联 gitea-runner-controller/runner" \
             || echo "关联失败（可能已关联、或凭据没有 write:package），不影响镜像本身"

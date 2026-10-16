@@ -15,9 +15,9 @@
 # 不覆盖（需要真 daemon，明确报错而不是静默失败）：run、compose、pull、exec、save、manifest …
 set -eu
 
-SHARED=${GKR_SHARED:-/shared}          # 与 kaniko 容器共享的目录（由 controller 挂载）
+SHARED=${GRC_SHARED:-/shared}          # 与 kaniko 容器共享的目录（由 controller 挂载）
 CREDS="$SHARED/kaniko/.docker/config.json"
-SPEC=/tmp/.gkr-last-build              # 最近一次 build 的参数，push 时复用
+SPEC=/tmp/.grc-last-build              # 最近一次 build 的参数，push 时复用
 log() { echo "[docker] $*" >&2; }
 die() { log "$*"; exit 1; }
 
@@ -32,73 +32,73 @@ strip_scheme() {
   esac
 }
 
-# 解析 build 的参数（$@ = build 之后的所有参数），结果放进 GKR_* 变量
+# 解析 build 的参数（$@ = build 之后的所有参数），结果放进 GRC_* 变量
 parse_build() {
-  GKR_TAGS=""; GKR_FILE=""; GKR_CTX=""; GKR_ARGS=""; GKR_TARGET=""; GKR_PLATFORM=""
-  GKR_PUSH=0; GKR_IGNORED=""; GKR_IID=""; GKR_META=""
+  GRC_TAGS=""; GRC_FILE=""; GRC_CTX=""; GRC_ARGS=""; GRC_TARGET=""; GRC_PLATFORM=""
+  GRC_PUSH=0; GRC_IGNORED=""; GRC_IID=""; GRC_META=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      -t|--tag)     GKR_TAGS="$GKR_TAGS $2"; shift 2 ;;
-      -f|--file)    GKR_FILE=$2; shift 2 ;;
-      --build-arg)  GKR_ARGS="$GKR_ARGS $2"; shift 2 ;;
-      --target)     GKR_TARGET=$2; shift 2 ;;
-      --platform)   GKR_PLATFORM=$2; shift 2 ;;
+      -t|--tag)     GRC_TAGS="$GRC_TAGS $2"; shift 2 ;;
+      -f|--file)    GRC_FILE=$2; shift 2 ;;
+      --build-arg)  GRC_ARGS="$GRC_ARGS $2"; shift 2 ;;
+      --target)     GRC_TARGET=$2; shift 2 ;;
+      --platform)   GRC_PLATFORM=$2; shift 2 ;;
       # —— 等号形式：--flag=value ——
-      --tag=*)         GKR_TAGS="$GKR_TAGS ${1#*=}"; shift ;;
-      --file=*)        GKR_FILE=${1#*=}; shift ;;
-      --build-arg=*)   GKR_ARGS="$GKR_ARGS ${1#*=}"; shift ;;
-      --target=*)      GKR_TARGET=${1#*=}; shift ;;
-      --platform=*)    GKR_PLATFORM=${1#*=}; shift ;;
-      --iidfile=*)      GKR_IID=${1#*=}; shift ;;
-      --metadata-file=*) GKR_META=${1#*=}; shift ;;
+      --tag=*)         GRC_TAGS="$GRC_TAGS ${1#*=}"; shift ;;
+      --file=*)        GRC_FILE=${1#*=}; shift ;;
+      --build-arg=*)   GRC_ARGS="$GRC_ARGS ${1#*=}"; shift ;;
+      --target=*)      GRC_TARGET=${1#*=}; shift ;;
+      --platform=*)    GRC_PLATFORM=${1#*=}; shift ;;
+      --iidfile=*)      GRC_IID=${1#*=}; shift ;;
+      --metadata-file=*) GRC_META=${1#*=}; shift ;;
       --cache-from=*|--cache-to=*|--secret=*|--ssh=*|--output=*|--builder=*|--network=*|--shm-size=*|--label=*|--progress=*|--provenance=*|--sbom=*|--attest=*)
-                       GKR_IGNORED="$GKR_IGNORED ${1%%=*}"; shift ;;
-      --push)       GKR_PUSH=1; shift ;;
+                       GRC_IGNORED="$GRC_IGNORED ${1%%=*}"; shift ;;
+      --push)       GRC_PUSH=1; shift ;;
       # —— 带值、但 kaniko 无对应物的参数：连值一起吃掉，只记一笔 ——
-      --iidfile)    GKR_IID=$2; shift 2 ;;
-      --metadata-file) GKR_META=$2; shift 2 ;;
+      --iidfile)    GRC_IID=$2; shift 2 ;;
+      --metadata-file) GRC_META=$2; shift 2 ;;
       --cache-from|--cache-to|--secret|--ssh|--output|-o|--builder|--network|--shm-size|--label)
-                    GKR_IGNORED="$GKR_IGNORED $1"; shift 2 ;;
+                    GRC_IGNORED="$GRC_IGNORED $1"; shift 2 ;;
       # —— 布尔、无对应物的参数 ——
       --progress|--provenance|--sbom|--attest|--no-cache|--pull|--quiet|-q|--load|--compress)
-                    GKR_IGNORED="$GKR_IGNORED $1"; shift ;;
-      --)           shift; [ $# -gt 0 ] && GKR_CTX=$1 && shift ;;
-      -*)           GKR_IGNORED="$GKR_IGNORED $1"; shift ;;
-      *)            GKR_CTX=$1; shift ;;
+                    GRC_IGNORED="$GRC_IGNORED $1"; shift ;;
+      --)           shift; [ $# -gt 0 ] && GRC_CTX=$1 && shift ;;
+      -*)           GRC_IGNORED="$GRC_IGNORED $1"; shift ;;
+      *)            GRC_CTX=$1; shift ;;
     esac
   done
-  [ -n "$GKR_CTX" ] || GKR_CTX=.
+  [ -n "$GRC_CTX" ] || GRC_CTX=.
   # 构建请求是交给**另一个容器**执行的，相对路径在那里没有意义 → 一律转绝对路径
-  GKR_CTX=$(cd "$GKR_CTX" && pwd)
-  [ -n "$GKR_FILE" ] || GKR_FILE="$GKR_CTX/Dockerfile"
-  [ -z "$GKR_IGNORED" ] || log "忽略 kaniko 无对应物的参数：$GKR_IGNORED"
-  case "$GKR_PLATFORM" in
-    *,*) die "多平台构建（--platform=$GKR_PLATFORM）本平台做不到：kaniko 一次只能构建一个平台（多平台需要 binfmt/QEMU 模拟，本集群安全基线不允许特权）" ;;
+  GRC_CTX=$(cd "$GRC_CTX" && pwd)
+  [ -n "$GRC_FILE" ] || GRC_FILE="$GRC_CTX/Dockerfile"
+  [ -z "$GRC_IGNORED" ] || log "忽略 kaniko 无对应物的参数：$GRC_IGNORED"
+  case "$GRC_PLATFORM" in
+    *,*) die "多平台构建（--platform=$GRC_PLATFORM）本平台做不到：kaniko 一次只能构建一个平台（多平台需要 binfmt/QEMU 模拟，本集群安全基线不允许特权）" ;;
   esac
-  printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$GKR_CTX" "$GKR_FILE" "$GKR_ARGS" "$GKR_TARGET" "$GKR_PLATFORM" "$GKR_TAGS" > "$SPEC"
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$GRC_CTX" "$GRC_FILE" "$GRC_ARGS" "$GRC_TARGET" "$GRC_PLATFORM" "$GRC_TAGS" > "$SPEC"
 }
 
-# 把一次构建（GKR_* + GKR_DEST）交给 kaniko 容器，并把它的输出流回来
+# 把一次构建（GRC_* + GRC_DEST）交给 kaniko 容器，并把它的输出流回来
 submit() {
   [ -d "$SHARED" ] || die "这个 job 里没有 kaniko 容器（$SHARED 不存在）：请让平台把该 job 识别为构建任务"
   dir="$SHARED/req/$$-$(date +%s)"
   meta=""; iid=""
-  for a in ${GKR_META:+"$GKR_META"}; do meta=$a; done
-  [ -z "${GKR_META:-}" ] || meta=$GKR_META
-  [ -z "${GKR_IID:-}" ] || iid=$GKR_IID
+  for a in ${GRC_META:+"$GRC_META"}; do meta=$a; done
+  [ -z "${GRC_META:-}" ] || meta=$GRC_META
+  [ -z "${GRC_IID:-}" ] || iid=$GRC_IID
   mkdir -p "$dir"
   : > "$dir/args"
-  printf '%s\n' "--context=dir://$GKR_CTX" "--dockerfile=$GKR_FILE" >> "$dir/args"
-  for a in $GKR_ARGS; do printf '%s\n' "--build-arg" "$a" >> "$dir/args"; done
-  [ -z "$GKR_TARGET" ]   || printf '%s\n' "--target" "$GKR_TARGET" >> "$dir/args"
-  [ -z "$GKR_PLATFORM" ] || printf '%s\n' "--custom-platform" "$GKR_PLATFORM" >> "$dir/args"
-  if [ -n "${GKR_DEST:-}" ]; then
+  printf '%s\n' "--context=dir://$GRC_CTX" "--dockerfile=$GRC_FILE" >> "$dir/args"
+  for a in $GRC_ARGS; do printf '%s\n' "--build-arg" "$a" >> "$dir/args"; done
+  [ -z "$GRC_TARGET" ]   || printf '%s\n' "--target" "$GRC_TARGET" >> "$dir/args"
+  [ -z "$GRC_PLATFORM" ] || printf '%s\n' "--custom-platform" "$GRC_PLATFORM" >> "$dir/args"
+  if [ -n "${GRC_DEST:-}" ]; then
     # 引用里带 http:// 就是"这台 registry 是 80、走明文" —— 剥掉协议的同时必须把它告诉 kaniko。
     # 为什么不靠 kaniko 自己判：go-containerregistry 只在私有网段/localhost/loopback/.local 才降级
     # 成 http，其余一律 https；所以 http:// 的公共域名（内网常见的 gitea.corp.local 之类）不显式
     # 指定就会用 https 去连。https:// 与不写协议同为默认（443），只需剥掉协议。
     insecure=""
-    for d in $GKR_DEST; do
+    for d in $GRC_DEST; do
       case "$d" in
         http://*) h=${d#*://}; insecure="$insecure ${h%%/*}" ;;
       esac
@@ -123,8 +123,8 @@ submit() {
     [ -n "$v" ] && printf '%s=%s\n' "$k" "$v" >> "$dir/env"
   done
   merged_no=$(printf '%s' "${NO_PROXY:-${no_proxy:-}}")
-  if [ -n "${GKR_PLATFORM_NO_PROXY:-}" ]; then
-    merged_no=$(printf '%s' "${merged_no:+$merged_no,}${GKR_PLATFORM_NO_PROXY}")
+  if [ -n "${GRC_PLATFORM_NO_PROXY:-}" ]; then
+    merged_no=$(printf '%s' "${merged_no:+$merged_no,}${GRC_PLATFORM_NO_PROXY}")
   fi
   [ -n "$merged_no" ] && printf 'NO_PROXY=%s\nno_proxy=%s\n' "$merged_no" "$merged_no" >> "$dir/env"
   log "转交代理设置给 kaniko 容器：$(tr '\n' ' ' < "$dir/env")"
@@ -157,7 +157,7 @@ submit() {
   # build-push-action 会读 --metadata-file / --iidfile 来算它的 outputs（digest 等）：
   # kaniko 的日志里有 "Pushed …@sha256:…"，据此写一份同样的元数据。
   digest=$(grep -oE '@sha256:[0-9a-f]{64}' "$dir/log" 2>/dev/null | head -1 | tr -d '@')
-  tags=$(printf '%s' "${GKR_DEST:-${GKR_TAGS:-}}" | tr ' ' ',' | sed 's/^,*//; s/,*$//')
+  tags=$(printf '%s' "${GRC_DEST:-${GRC_TAGS:-}}" | tr ' ' ',' | sed 's/^,*//; s/,*$//')
   if [ -n "$digest" ]; then
     [ -z "$iid" ] || printf '%s' "$digest" > "$iid"
     [ -z "$meta" ] || printf '{"containerimage.digest":"%s","containerimage.config.digest":"%s","image.name":"%s"}' \
@@ -209,20 +209,20 @@ case "$cmd" in
       esac
     fi
     parse_build "$@"
-    if [ "$GKR_PUSH" = 1 ] && [ -n "$GKR_TAGS" ]; then
-      GKR_DEST="$GKR_TAGS" submit       # 多个 tag 一次构建、推多份
+    if [ "$GRC_PUSH" = 1 ] && [ -n "$GRC_TAGS" ]; then
+      GRC_DEST="$GRC_TAGS" submit       # 多个 tag 一次构建、推多份
     fi
-    GKR_DEST="" submit
+    GRC_DEST="" submit
     ;;
 
   push)
     ref=${1:-}; [ -n "$ref" ] || die "push 需要镜像名：docker push <ref>"
     [ -f "$SPEC" ] || die "没有可推送的镜像：本平台没有本地镜像库，push 只能跟在同一个 job 里的 build 之后"
-    { read -r GKR_CTX <&3; read -r GKR_FILE <&3; read -r GKR_ARGS <&3; read -r GKR_TARGET <&3; read -r GKR_PLATFORM <&3; read -r GKR_TAGS <&3; } 3< "$SPEC" || true
+    { read -r GRC_CTX <&3; read -r GRC_FILE <&3; read -r GRC_ARGS <&3; read -r GRC_TARGET <&3; read -r GRC_PLATFORM <&3; read -r GRC_TAGS <&3; } 3< "$SPEC" || true
     # 如果 ref 是上次 build 的某个 tag，就把那批 tag 一起推掉（kaniko 一次可推多个 destination）
-    case " ${GKR_TAGS:-} " in
-      *" $ref "*) GKR_DEST="$GKR_TAGS" ;;
-      *)          GKR_DEST="$GKR_TAGS $ref" ;;
+    case " ${GRC_TAGS:-} " in
+      *" $ref "*) GRC_DEST="$GRC_TAGS" ;;
+      *)          GRC_DEST="$GRC_TAGS $ref" ;;
     esac
     log "push $ref：本平台没有本地镜像库，按上次 build 的参数重新构建并推送"
     submit

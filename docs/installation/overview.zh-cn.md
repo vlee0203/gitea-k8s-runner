@@ -40,7 +40,7 @@ user/repo 作用域，两边清单天然分开（见[安全模型](../advanced/s
 
 ```bash
 # 1. 令牌放进 Secret（controller 经 k8s API 读，不落盘、不随 Pod 分发）
-kubectl -n <ns> create secret generic gitea-runner-registration --from-literal=token=<TOKEN>
+kubectl -n <ns> create secret generic gitea-runner-controller-registration --from-literal=token=<TOKEN>
 
 # 2. 按需改清单：
 #    GITEA_INSTANCE_URL  —— 真实 Gitea 地址
@@ -55,8 +55,8 @@ kubectl apply -f deploy/cache.yaml
 #    没应用它却设了 SECRET_FILE，controller 会因读不到文件**直接启动失败**。
 ```
 
-> **集群级清单里写死了 `namespace: gitea-k8s-runner`**（ServiceAccount/Role/Deployment 等处）。
-> 部署到别的命名空间时记得一并替换，否则资源和 Pod 会落到 `gitea-k8s-runner` 这个 ns 里。
+> **集群级清单里写死了 `namespace: gitea-runner-controller`**（ServiceAccount/Role/Deployment 等处）。
+> 部署到别的命名空间时记得一并替换，否则资源和 Pod 会落到 `gitea-runner-controller` 这个 ns 里。
 
 `pools.yaml` 示例（labels 的含义与匹配规则见[用法](../usage/overview.zh-cn.md)）：
 
@@ -132,7 +132,7 @@ jobs:
       - run: echo ok
 ```
 
-   job 成功后，`kubectl get pods` 里应短暂出现 `gitea-runner-<repo>-<job>-<taskid>` 并随后被删除。
+   job 成功后，`kubectl get pods` 里应短暂出现 `grc-<repo>-<job>-<taskid>` 并随后被删除。
 
 ## 两种清单的差异
 

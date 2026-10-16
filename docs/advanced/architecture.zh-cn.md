@@ -50,7 +50,7 @@ Gitea ◀─(worker 凭注册身份领取/回报)─ controller ──建 Pod─
 
 - **worker**：每个池一个，= 一条 Gitea runner 注册 + 一个领活循环 + 本地槽位（`slots`）。
 - **facade**：每个 worker 一个，只把预领取的 task 交给持对应 capability 的 executor。
-- **executor Pod**：一次性，跑完即删；命名 `gitea-runner-<repo>-<job>-<taskid>`，按 label 定位。
+- **executor Pod**：一次性，跑完即删；命名 `grc-<repo>-<job>-<taskid>`，按 label 定位。
 - **构建型 job**：Pod 里多一个官方 kaniko 容器（见[在 workflow 里构建镜像](../usage/image-building.zh-cn.md)）。
 
 ## 状态与恢复

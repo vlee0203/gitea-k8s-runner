@@ -104,13 +104,13 @@ func env(key, def string) string {
 func Load() (*Config, error) {
 	c := &Config{
 		GiteaURL:                strings.TrimRight(env("GITEA_INSTANCE_URL", ""), "/"),
-		RegistrationTokenFile:   env("REGISTRATION_TOKEN_FILE", "/etc/gitea-k8s-runner/registration-token"),
+		RegistrationTokenFile:   env("REGISTRATION_TOKEN_FILE", "/etc/gitea-runner-controller/registration-token"),
 		ControllerURL:           env("CONTROLLER_URL", ""),
 		ListenAddr:              env("LISTEN_ADDR", ":8080"),
 		Scope:                   env("SCOPE", "namespace"),
 		TargetNamespace:         env("TARGET_NAMESPACE", ""),
-		WorkerName:              env("WORKER_NAME", "gitea-k8s-runner"),
-		StateSecretName:         env("STATE_SECRET_NAME", "gitea-k8s-runner-state"),
+		WorkerName:              env("WORKER_NAME", "gitea-runner-controller"),
+		StateSecretName:         env("STATE_SECRET_NAME", "gitea-runner-controller-state"),
 		ImagePullSecret:         env("IMAGE_PULL_SECRET", ""),
 		CacheServerURL:          env("CACHE_SERVER_URL", ""),
 		RunnerImage:             env("RUNNER_IMAGE", ""),
@@ -149,7 +149,7 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("SCOPE must be namespace or cluster, got %q", c.Scope)
 	}
 
-	pf := env("POOLS_FILE", "/etc/gitea-k8s-runner/pools.yaml")
+	pf := env("POOLS_FILE", "/etc/gitea-runner-controller/pools.yaml")
 	b, err := os.ReadFile(pf)
 	if err != nil {
 		return nil, fmt.Errorf("read pools file %s: %w", pf, err)
@@ -210,7 +210,7 @@ func (c *Config) ProxyEnv() map[string]string {
 	inCluster := c.noProxyHosts()
 	httpProxy := env("HTTP_PROXY", os.Getenv("http_proxy"))
 	httpsProxy := env("HTTPS_PROXY", os.Getenv("https_proxy"))
-	// GKR_PLATFORM_NO_PROXY is always set: a workflow may bring its own proxy for
+	// GRC_PLATFORM_NO_PROXY is always set: a workflow may bring its own proxy for
 	// its steps (workflow/secret env), and the docker shim forwards it to the
 	// kaniko container — merging this list in keeps in-cluster traffic direct even
 	// when the workflow's own NO_PROXY forgets those hosts.
@@ -221,7 +221,7 @@ func (c *Config) ProxyEnv() map[string]string {
 	always := map[string]string{
 		"NO_PROXY":              noProxy,
 		"no_proxy":              noProxy,
-		"GKR_PLATFORM_NO_PROXY": strings.Join(inCluster, ","),
+		"GRC_PLATFORM_NO_PROXY": strings.Join(inCluster, ","),
 	}
 	if httpProxy == "" && httpsProxy == "" {
 		return always
@@ -238,7 +238,7 @@ func (c *Config) ProxyEnv() map[string]string {
 	if httpsProxy != "" {
 		out["HTTPS_PROXY"], out["https_proxy"] = httpsProxy, httpsProxy
 	}
-	out["GKR_PLATFORM_NO_PROXY"] = always["GKR_PLATFORM_NO_PROXY"]
+	out["GRC_PLATFORM_NO_PROXY"] = always["GRC_PLATFORM_NO_PROXY"]
 	return out
 }
 

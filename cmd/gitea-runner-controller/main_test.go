@@ -30,7 +30,7 @@ func TestGiteaProxyRewritesHostAndKeepsPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 模拟 runner：请求发给 facade，Host 头带的是 facade 自己的名字
-	req.Host = "gitea-k8s-runner:8080"
+	req.Host = "gitea-runner-controller:8080"
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
