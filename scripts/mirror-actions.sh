@@ -71,7 +71,14 @@ git_clone() {  # $1=owner/repo  $2=目标目录
   local -a px=()
   [ -n "${HTTPS_PROXY:-}" ] && px+=(-c "https.proxy=$HTTPS_PROXY")
   [ -n "${HTTP_PROXY:-}"  ] && px+=(-c "http.proxy=$HTTP_PROXY")
-  GIT_TERMINAL_PROMPT=0 git "${px[@]}" clone --bare --quiet "https://github.com/$spec.git" "$dest"
+  local try
+  for try in 1 2 3; do
+    if GIT_TERMINAL_PROMPT=0 git "${px[@]}" clone --bare --quiet "$SRC_BASE/$spec.git" "$dest"; then
+      return 0
+    fi
+    rm -rf "$dest"; sleep 5
+  done
+  return 1
 }
 
 # 用 Authorization 头带凭据 push：既不把密码写进 URL（会出现在 ps 里），也不用改写目标 scheme
@@ -81,11 +88,14 @@ git_push() {  # $1=本地裸库 $2=Gitea 基址(http/https) $3=owner/repo  $4=us
     "$2/$3.git" 'refs/heads/v*:refs/heads/v*' 'refs/tags/v*:refs/tags/v*'
 }
 
+SRC_BASE="${SRC_BASE:-https://github.com}"
+
 cmd_export() {
   local out=actions-bundle.tar
   while [ $# -gt 0 ]; do
     case "$1" in
       --out)  out="$2"; shift 2 ;;
+      --from) SRC_BASE="$2"; shift 2 ;;   # 从已镜像好的实例打包（匿名可克隆即可），绕开 github
       --only) IFS=, read -r -a _x <<<"$2"; ONLY+=("${_x[@]}"); shift 2 ;;
       *) die "export 不认识参数：$1" ;;
     esac
