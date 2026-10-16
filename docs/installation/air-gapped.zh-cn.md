@@ -86,6 +86,8 @@ sed -i "s#ghcr.io/vlee0203/gitea-runner-controller#${REG}/gitea-runner-controlle
 # ② 把 tar 带进内网，在能同时访问 tar 和内网 Gitea 的机器上导入
 ./scripts/mirror-actions.sh import \
   --gitea http://10.0.0.10:3000 --user admin --token <管理员 PAT> --bundle actions-bundle.tar
+# 自签实例懒得带 CA 也可以加 --insecure（git 与 curl 都跳过校验）；
+# 更干净的做法是把 CA 装进机器信任区：cp ca-bundle.crt /usr/local/share/ca-certificates/ && update-ca-certificates
 ```
 
 - 导入会建组织（`actions` / `docker`）、建仓库、推 `refs/heads/v*` 与 `refs/tags/v*`。

@@ -157,7 +157,7 @@ cmd_import() {
   fi
   for o in $orgs; do
     code=$(curl $CURL -s -o /dev/null -w '%{http_code}' -u "$user:$token" -X POST \
-      "$gitea/api/v1/orgs" -H 'Content-Type: application/json' -d "{\"username\":\"$o\"}" || echo 000)
+      "$gitea/api/v1/orgs" -H 'Content-Type: application/json' -d "{\"username\":\"$o\"}")
     [ "$code" != 000 ] || die "连不上 $gitea（证书被拒就加 --insecure，或把 CA 装进系统信任区）"
     case "$code" in
       201)      say "建组织 $o ✓" ;;
