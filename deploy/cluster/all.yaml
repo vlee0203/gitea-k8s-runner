@@ -77,24 +77,20 @@ data:
   # 容器 image 与 RUNNER_IMAGE 那一处，三处保持一致。
   pools.yaml: |
     pools:
-      - labels: [self-hosted, linux, x64, ubuntu-latest, ubuntu-24.04]
-        image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-b2de794
-        resources:
-          cpu: "2"
-          memory: 4Gi
-          ephemeralStorage: 10Gi
-        slots: 2
-        timeout: 1h
-      # 第二个池只是"更大规格 + 自带标签"，镜像与上一个相同：workflow 里的 docker 构建
-      # 由平台自动附加的 kaniko 容器完成（见 KANIKO_IMAGE），不需要专用构建镜像。
-      - labels: [self-hosted, build]
-        image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-b2de794
-        resources:
-          cpu: "2"
-          memory: 4Gi
-          ephemeralStorage: 10Gi
-        slots: 1
-        timeout: 1h
+    - labels:
+      - self-hosted
+      - linux
+      - x64
+      - ubuntu-latest
+      - ubuntu-24.04
+      - build
+      image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-b2de794
+      resources:
+        cpu: '2'
+        memory: 4Gi
+        ephemeralStorage: 10Gi
+      slots: 2
+      timeout: 1h
 ---
 apiVersion: apps/v1
 kind: Deployment

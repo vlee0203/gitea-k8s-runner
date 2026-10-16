@@ -62,7 +62,7 @@ done
 
 | 文件 | 位置 | 换成 |
 | --- | --- | --- |
-| `deploy/{namespace,cluster}/all.yaml` | `pools.yaml` 里两个池的 `image:` | `$REG/gitea-runner-controller/runner:ubuntu-latest` |
+| `deploy/{namespace,cluster}/all.yaml` | `pools.yaml` 里池的 `image:` | `$REG/gitea-runner-controller/runner:ubuntu-latest` |
 | 同上 | 容器 `image:` | `$REG/gitea-runner-controller/controller:latest` |
 | 同上 | env `RUNNER_IMAGE` | `$REG/gitea-runner-controller/runner:ubuntu-latest` |
 | 同上 | env `KANIKO_IMAGE` | `$REG/gitea-runner-controller/kaniko:v1.28.6-debug` |
