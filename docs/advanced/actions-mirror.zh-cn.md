@@ -15,8 +15,9 @@ weight: 44
 
 | owner | 仓库 |
 | --- | --- |
-| `actions` | `checkout`、`cache`、`upload-artifact`、`download-artifact`、`setup-go`、`setup-node`、`setup-python`、`setup-java`、`setup-dotnet`、`github-script` |
-| `docker` | `login-action`、`build-push-action`、`setup-qemu-action`、`setup-buildx-action`、`metadata-action` |
+| `actions` | `checkout`、`cache`、`upload-artifact`、`download-artifact`、`setup-go`、`setup-node`、`setup-python`、`setup-java`、`setup-dotnet`、`github-script`、`stale`、`labeler`、`delete-package-versions` |
+| `docker` | `login-action`、`build-push-action`、`setup-qemu-action`、`setup-buildx-action`、`metadata-action`、`bake-action` |
+| 第三方（用得极多，镜像它们=信任其上游） | `ruby/setup-ruby`、`shivammathur/setup-php`、`softprops/action-gh-release`、`peter-evans/create-pull-request` |
 
 全部 **public**（所有用户的所有仓库都能用）；除下节列的 4 个例外都是 **pull mirror**，Gitea 会按间隔自动同步上游。
 

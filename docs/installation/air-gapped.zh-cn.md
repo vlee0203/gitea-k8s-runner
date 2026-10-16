@@ -13,7 +13,7 @@ weight: 12
 | 1 | `controller` 镜像 | `ghcr.io` | 内网镜像仓库 |
 | 2 | `runner` 镜像（执行环境；cache-server 也用同一个） | `ghcr.io` | 内网镜像仓库 |
 | 3 | `kaniko` 镜像 | `ghcr.io` | 内网镜像仓库 |
-| 4 | **15 个 action 仓库** | `github.com`（或 Gitea 的 `self`） | 内网 Gitea |
+| 4 | **23 个 action 仓库** | `github.com`（或 Gitea 的 `self`） | 内网 Gitea |
 
 第 4 项最容易漏：实例设了 `DEFAULT_ACTIONS_URL=self` 之后，`uses: actions/checkout@v4` 会去**你自己的
 Gitea** 找 `actions/checkout`，找不到就直接失败，而且**不会回落 github.com**。详见
@@ -79,7 +79,7 @@ sed -i "s#ghcr.io/vlee0203/gitea-runner-controller#${REG}/gitea-runner-controlle
 
 ```bash
 # ① 在能出网、能访问 github.com 的机器上打包（有 HTTP(S)_PROXY 会自动走）
-./scripts/mirror-actions.sh export --out actions-bundle.tar     # 15 个 action，体积百 MB 级
+./scripts/mirror-actions.sh export --out actions-bundle.tar     # 23 个 action，体积百 MB 级
 
 # ② 把 tar 带进内网，在能同时访问 tar 和内网 Gitea 的机器上导入
 ./scripts/mirror-actions.sh import \

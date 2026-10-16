@@ -31,11 +31,20 @@ ACTIONS=(
   actions/setup-java
   actions/setup-dotnet
   actions/github-script
+  actions/stale
+  actions/labeler
+  actions/delete-package-versions
   docker/login-action
   docker/build-push-action
   docker/setup-qemu-action
   docker/setup-buildx-action
   docker/metadata-action
+  docker/bake-action
+  # 第三方但用得极多（注意：镜像它们等于信任其上游仓库）
+  ruby/setup-ruby
+  shivammathur/setup-php
+  softprops/action-gh-release
+  peter-evans/create-pull-request
 )
 
 # --only owner/repo[,owner/repo…]：只处理列出的
