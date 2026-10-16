@@ -157,7 +157,7 @@ cmd_import() {
   fi
   for o in $orgs; do
     code=$(curl $CURL -s -o /dev/null -w '%{http_code}' -u "$user:$token" -X POST \
-      "$gitea/api/v1/orgs" -H 'Content-Type: application/json' -d "{\"username\":\"$o\"}")
+      "$gitea/api/v1/orgs" -H 'Content-Type: application/json' -d "{\"username\":\"$o\"}" || true)
     [ "$code" != 000 ] || die "连不上 $gitea（证书被拒就加 --insecure，或把 CA 装进系统信任区）"
     case "$code" in
       201)      say "建组织 $o ✓" ;;
@@ -173,7 +173,7 @@ cmd_import() {
     say "== $spec"
     code=$(curl $CURL -s -o /dev/null -w '%{http_code}' -u "$user:$token" -X POST \
       "$gitea/api/v1/orgs/$org/repos" -H 'Content-Type: application/json' \
-      -d "{\"name\":\"$repo\",\"private\":false,\"auto_init\":false,\"description\":\"mirror of github.com/$spec (v* refs)\"}")
+      -d "{\"name\":\"$repo\",\"private\":false,\"auto_init\":false,\"description\":\"mirror of github.com/$spec (v* refs)\"}" || true)
     case "$code" in
       201)      say "  建仓库 ✓" ;;
       409|422)  say "  仓库已存在，跳过创建" ;;
