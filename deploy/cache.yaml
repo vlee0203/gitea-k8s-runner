@@ -56,7 +56,7 @@ spec:
             # 否则会被命名空间 LimitRange 的默认值（usw 实测 100Mi）注入，写满即被驱逐
             requests: { cpu: 50m, memory: 100Mi, ephemeral-storage: 1Gi }
             limits: { cpu: 500m, memory: 1Gi, ephemeral-storage: 1Gi }
-          image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-d52c20b
+          image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-b2de794
           command:
             - /usr/local/bin/gitea-runner
             - cache-server
