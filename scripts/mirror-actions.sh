@@ -56,6 +56,8 @@ selected() {
 }
 
 REPUSH=false                 # 目标仓库已有 tags 时默认跳过推送（幂等）；--repush 强制重推
+INSECURE=false               # --insecure：跳过 TLS 校验（git 与 curl 都跟着跳），自签实例且懒得带 CA 时用
+CURL=""                      # --insecure 时变成 -k
 TMP=""                       # 全局，供 EXIT trap 清理
 cleanup() { [ -n "$TMP" ] && rm -rf "$TMP"; return 0; }
 trap cleanup EXIT
@@ -73,7 +75,7 @@ git_clone() {  # $1=owner/repo  $2=目标目录
   [ -n "${HTTP_PROXY:-}"  ] && px+=(-c "http.proxy=$HTTP_PROXY")
   local try
   for try in 1 2 3; do
-    if GIT_TERMINAL_PROMPT=0 git "${px[@]}" clone --bare --quiet "$SRC_BASE/$spec.git" "$dest"; then
+    if GIT_TERMINAL_PROMPT=0 git $GV "${px[@]}" clone --bare --quiet "$SRC_BASE/$spec.git" "$dest"; then
       return 0
     fi
     rm -rf "$dest"; sleep 5
@@ -84,22 +86,28 @@ git_clone() {  # $1=owner/repo  $2=目标目录
 # 用 Authorization 头带凭据 push：既不把密码写进 URL（会出现在 ps 里），也不用改写目标 scheme
 git_push() {  # $1=本地裸库 $2=Gitea 基址(http/https) $3=owner/repo  $4=user  $5=token
   local auth; auth="$(printf '%s:%s' "$4" "$5" | base64 | tr -d '\n')"
-  git -C "$1" -c "http.extraHeader=Authorization: Basic $auth" push -q \
+  git -C "$1" $GV -c "http.extraHeader=Authorization: Basic $auth" push -q \
     "$2/$3.git" 'refs/heads/v*:refs/heads/v*' 'refs/tags/v*:refs/tags/v*'
 }
 
 SRC_BASE="${SRC_BASE:-https://github.com}"
+
+set_insecure() {   # 由 --insecure 决定 git/curl 的跳过校验参数
+  if [ "$INSECURE" = true ]; then GV="-c http.sslVerify=false"; CURL="-k"; else GV=""; CURL=""; fi
+}
 
 cmd_export() {
   local out=actions-bundle.tar
   while [ $# -gt 0 ]; do
     case "$1" in
       --out)  out="$2"; shift 2 ;;
-      --from) SRC_BASE="$2"; shift 2 ;;   # 从已镜像好的实例打包（匿名可克隆即可），绕开 github
+      --from) SRC_BASE="$2"; shift 2 ;;
+      --insecure) INSECURE=true; shift ;;   # 从已镜像好的实例打包（匿名可克隆即可），绕开 github
       --only) IFS=, read -r -a _x <<<"$2"; ONLY+=("${_x[@]}"); shift 2 ;;
       *) die "export 不认识参数：$1" ;;
     esac
   done
+  set_insecure
   TMP="$(mktemp -d)"
   say "拉取 action 到 $TMP"
   for spec in "${ACTIONS[@]}"; do
@@ -124,6 +132,7 @@ cmd_import() {
       --bundle) bundle="$2"; shift 2 ;;
       --only)   IFS=, read -r -a _x <<<"$2"; ONLY+=("${_x[@]}"); shift 2 ;;
       --repush) REPUSH=true; shift ;;
+      --insecure) INSECURE=true; shift ;;
       *) die "import 不认识参数：$1" ;;
     esac
   done
@@ -133,20 +142,23 @@ cmd_import() {
   case "$gitea" in http://*|https://*) ;; *) die "--gitea 要带 http:// 或 https://" ;; esac
 
   # 建组织/仓库需要管理员权限：目标实例通常会关掉普通用户建组织。
+  set_insecure
   local orgs="" o spec org repo dir code
   for spec in "${ACTIONS[@]}"; do
     selected "$spec" || continue
     o="${spec%%/*}"
     case " $orgs " in *" $o "*) ;; *) orgs="$orgs $o" ;; esac
   done
+  set_insecure
   TMP="$(mktemp -d)"
   if [ -n "$bundle" ]; then
     say "解开 bundle：$bundle"
     tar -C "$TMP" -xf "$bundle"
   fi
   for o in $orgs; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' -u "$user:$token" -X POST \
-      "$gitea/api/v1/orgs" -H 'Content-Type: application/json' -d "{\"username\":\"$o\"}")
+    code=$(curl $CURL -s -o /dev/null -w '%{http_code}' -u "$user:$token" -X POST \
+      "$gitea/api/v1/orgs" -H 'Content-Type: application/json' -d "{\"username\":\"$o\"}" || echo 000)
+    [ "$code" != 000 ] || die "连不上 $gitea（证书被拒就加 --insecure，或把 CA 装进系统信任区）"
     case "$code" in
       201)      say "建组织 $o ✓" ;;
       422|409)  say "组织 $o 已存在，跳过" ;;
@@ -159,7 +171,7 @@ cmd_import() {
     selected "$spec" || continue
     org="${spec%%/*}"; repo="${spec##*/}"; dir="$TMP/$(echo "$spec" | tr / _).git"
     say "== $spec"
-    code=$(curl -s -o /dev/null -w '%{http_code}' -u "$user:$token" -X POST \
+    code=$(curl $CURL -s -o /dev/null -w '%{http_code}' -u "$user:$token" -X POST \
       "$gitea/api/v1/orgs/$org/repos" -H 'Content-Type: application/json' \
       -d "{\"name\":\"$repo\",\"private\":false,\"auto_init\":false,\"description\":\"mirror of github.com/$spec (v* refs)\"}")
     case "$code" in
@@ -198,7 +210,7 @@ cmd_import() {
 }
 
 tags_of() {  # $1=gitea $2=user $3=token $4=owner/repo
-  curl -s -u "$2:$3" "$1/api/v1/repos/$4/tags?limit=100" | grep -o '"name"' | wc -l | tr -d ' '
+  curl $CURL -s -u "$2:$3" "$1/api/v1/repos/$4/tags?limit=100" | grep -o '"name"' | wc -l | tr -d ' '
 }
 
 [ $# -ge 1 ] || usage 1
