@@ -13,7 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/vlee0203/gitea-k8s-runner/internal/executor"
+	"github.com/vlee0203/gitea-runner-controller/internal/executor"
 )
 
 // Upstreams returns the Gitea client that owns a pool's runner identity. A task

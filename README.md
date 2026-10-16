@@ -1,4 +1,4 @@
-# gitea-k8s-runner
+# gitea-runner-controller
 
 把 **Gitea Actions** 的 job 跑成 Kubernetes 里**一次性 Pod** 的 controller（类 GitHub ARC）。
 
@@ -57,8 +57,8 @@ jobs:
 
 | 镜像 | 内容 |
 | --- | --- |
-| `ghcr.io/vlee0203/gitea-k8s-runner/controller:latest` | controller（`container/controller.Dockerfile`，distroless） |
-| `ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest` | 执行环境（工具链 + stock gitea-runner + `docker` 替身） |
+| `ghcr.io/vlee0203/gitea-runner-controller/controller:latest` | controller（`container/controller.Dockerfile`，distroless） |
+| `ghcr.io/vlee0203/gitea-runner-controller/runner:ubuntu-latest` | 执行环境（工具链 + stock gitea-runner + `docker` 替身） |
 
 ## 能力速查
 

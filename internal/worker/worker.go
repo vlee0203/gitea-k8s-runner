@@ -21,10 +21,10 @@ import (
 	runnerv1 "gitea.dev/actionslib/runner/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/vlee0203/gitea-k8s-runner/internal/config"
-	"github.com/vlee0203/gitea-k8s-runner/internal/executor"
-	"github.com/vlee0203/gitea-k8s-runner/internal/facade"
-	"github.com/vlee0203/gitea-k8s-runner/internal/giteaclient"
+	"github.com/vlee0203/gitea-runner-controller/internal/config"
+	"github.com/vlee0203/gitea-runner-controller/internal/executor"
+	"github.com/vlee0203/gitea-runner-controller/internal/facade"
+	"github.com/vlee0203/gitea-runner-controller/internal/giteaclient"
 )
 
 const (

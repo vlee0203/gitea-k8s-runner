@@ -10,9 +10,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags "-s -w" -o /out/gitea-k8s-runner ./cmd/gitea-k8s-runner
+    go build -trimpath -ldflags "-s -w" -o /out/gitea-runner-controller ./cmd/gitea-runner-controller
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/gitea-k8s-runner /usr/local/bin/gitea-k8s-runner
-ENTRYPOINT ["/usr/local/bin/gitea-k8s-runner"]
+COPY --from=build /out/gitea-runner-controller /usr/local/bin/gitea-runner-controller
+ENTRYPOINT ["/usr/local/bin/gitea-runner-controller"]
 CMD ["controller"]

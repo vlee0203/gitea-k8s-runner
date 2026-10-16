@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vlee0203/gitea-k8s-runner/internal/config"
-	"github.com/vlee0203/gitea-k8s-runner/internal/facade"
+	"github.com/vlee0203/gitea-runner-controller/internal/config"
+	"github.com/vlee0203/gitea-runner-controller/internal/facade"
 )
 
 // activityResolver reports each capability's quiet time from a table the test controls.

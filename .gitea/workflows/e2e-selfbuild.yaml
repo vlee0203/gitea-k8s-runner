@@ -1,0 +1,110 @@
+name: e2e-selfbuild
+
+# 内网自测：用本平台在自己的 Gitea 上构建本项目的两个镜像。
+#
+# 为什么这么写：
+# - 内网 Gitea 没有同步任何 action，所以**不能**用 `uses: actions/checkout@v4`；
+#   这里用 Gitea 内置的 `uses: builtin:checkout`（runner 内置实现，不下载任何东西）。
+# - 平台 controller 没配代理，所以代理由**工作流自己**给：下面的 HTTP_PROXY/HTTPS_PROXY
+#   取自仓库 secret。平台会把步骤里的代理转交给构建用的 kaniko 容器（拉基础镜像/推镜像都走它）。
+# - 构建用标准 docker 写法（`docker login` / `docker build --push`），由平台镜像里的 docker
+#   替身转给同 Pod 的 kaniko 容器完成 —— 这正是本测试要验证的链路。
+#
+# 部署前要填（本仓库 → 设置 → 密钥，全部以 secret 形式）：
+#   REGISTRY   内网 Gitea 的地址（**不带协议**，可带端口），例如 gitea.corp.local:3000
+#              —— 已经写成 https://… 也不用改：下面第一步会把协议前缀去掉（镜像引用里带协议
+#              会让 kaniko 把 "https" 当主机名，报 `Get "https://https/v2/": EOF`）
+#   REG_USER   能往该 registry 推镜像的账号
+#   REG_PASS   上面的密码或 PAT（Gitea 的内置 token 推不了 registry，必须用 PAT/密码）
+#   HTTP_PROXY / HTTPS_PROXY   出网代理（内网完全不出网又不需要拉公网镜像时留空即可）
+#   NO_PROXY   可选；集群内地址平台会自动补，不用手写
+#
+# 两个 job 各自独立，哪个失败都不影响另一个。
+
+on:
+  push:
+  workflow_dispatch:
+
+# 私有仓库 + 仓库设置里「默认令牌权限 = 受限」时，job 令牌默认**不含**仓库读权限，
+# checkout 会拿到 404（Gitea 对无权限的私有仓返 404 而不是 403）。
+# 显式声明 contents: read 才拿得到 —— 这是 GitHub/Gitea 的标准写法，公开仓库不声明也能过。
+permissions:
+  contents: read
+
+env:
+  HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+  HTTPS_PROXY: ${{ secrets.HTTPS_PROXY }}
+  NO_PROXY: ${{ secrets.NO_PROXY }}
+
+jobs:
+  build-controller:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 规范化 REGISTRY（去掉可能的协议前缀）并检查配置
+        env:
+          REGISTRY_RAW: ${{ secrets.REGISTRY }}
+        run: |
+          [ -n "$REGISTRY_RAW" ] || { echo "::error::未设置密钥 REGISTRY"; exit 1; }
+          [ -n "${{ secrets.REG_USER }}" ] || { echo "::error::未设置密钥 REG_USER"; exit 1; }
+          [ -n "${{ secrets.REG_PASS }}" ] || { echo "::error::未设置密钥 REG_PASS"; exit 1; }
+          echo "REG=${REGISTRY_RAW#*://}" >> "$GITHUB_ENV"
+          echo "目标 registry: ${REGISTRY_RAW#*://}"
+          echo "代理: ${HTTPS_PROXY:-（未设置）}"
+
+      - name: 取源码（Gitea 内置，不下载 action）
+        uses: builtin:checkout
+
+      - name: 环境自检
+        run: |
+          echo "工作目录: $(pwd)"; ls -la | head -12
+          echo "commit: $(git rev-parse --short HEAD)"
+          docker version
+
+      - name: 登录 registry
+        run: echo "${{ secrets.REG_PASS }}" | docker login "$REG" -u "${{ secrets.REG_USER }}" --password-stdin
+
+      - name: 构建并推送 controller 镜像
+        run: |
+          docker build --push \
+            -t "$REG/volcano/gitea-k8s-runner/controller:e2e" \
+            -f container/controller.Dockerfile .
+
+      # Gitea 不会把推上去的容器包自动关联到仓库（实测：包的 repository 一直是 null），
+      # 一次调用即可关联该包的**全部版本**（解除是 /-/unlink）。注意两处：包名的斜杠要写成
+      # %2F（原样斜杠是 404），以及这里用的是**镜像引用不带协议**、而 API 的 URL 要带协议。
+      - name: 关联镜像包到本仓库（失败不影响构建）
+        run: |
+          curl -sf -X POST -u "${{ secrets.REG_USER }}:${{ secrets.REG_PASS }}" \
+            "https://$REG/api/v1/packages/volcano/container/gitea-k8s-runner%2Fcontroller/-/link/gitea-k8s-runner" \
+            && echo "已关联 gitea-k8s-runner/controller" \
+            || echo "关联失败（可能已关联、或凭据没有 write:package），不影响镜像本身"
+
+  build-runner:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 规范化 REGISTRY（去掉可能的协议前缀）并检查配置
+        env:
+          REGISTRY_RAW: ${{ secrets.REGISTRY }}
+        run: |
+          [ -n "$REGISTRY_RAW" ] || { echo "::error::未设置密钥 REGISTRY"; exit 1; }
+          echo "REG=${REGISTRY_RAW#*://}" >> "$GITHUB_ENV"
+          echo "目标 registry: ${REGISTRY_RAW#*://}（这个 job 要拉 docker.gitea.com 的基底，比较重）"
+
+      - name: 取源码（Gitea 内置，不下载 action）
+        uses: builtin:checkout
+
+      - name: 登录 registry
+        run: echo "${{ secrets.REG_PASS }}" | docker login "$REG" -u "${{ secrets.REG_USER }}" --password-stdin
+
+      - name: 构建并推送 runner 镜像
+        run: |
+          docker build --push \
+            -t "$REG/volcano/gitea-k8s-runner/runner:e2e" \
+            -f container/runner.Dockerfile .
+
+      - name: 关联镜像包到本仓库（失败不影响构建）
+        run: |
+          curl -sf -X POST -u "${{ secrets.REG_USER }}:${{ secrets.REG_PASS }}" \
+            "https://$REG/api/v1/packages/volcano/container/gitea-k8s-runner%2Frunner/-/link/gitea-k8s-runner" \
+            && echo "已关联 gitea-k8s-runner/runner" \
+            || echo "关联失败（可能已关联、或凭据没有 write:package），不影响镜像本身"

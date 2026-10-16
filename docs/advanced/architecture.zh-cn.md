@@ -76,4 +76,4 @@ Pending**，不处理就会占着槽位、并卡住 controller 的 drain 与滚�
   （job 的 context 不随 leader context 取消），最多等 `SHUTDOWN_TIMEOUT`（默认 30m，
   需 ≤ `terminationGracePeriodSeconds`）；超时才取消，并把被砍的 task 报失败供 rerun。
 
-`controller` 是本仓库唯一的可执行文件（`gitea-k8s-runner controller`）。
+`controller` 是本仓库唯一的可执行文件（`gitea-runner-controller controller`）。

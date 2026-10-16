@@ -32,13 +32,13 @@ REG=<内网registry，如 harbor.corp.local/library>
 skopeo login ghcr.io -u <GitHub用户名>
 
 for img in \
-  gitea-k8s-runner/controller:latest \
-  gitea-k8s-runner/runner:ubuntu-latest \
+  gitea-runner-controller/controller:latest \
+  gitea-runner-controller/runner:ubuntu-latest \
   osscontainertools/kaniko:v1.28.6-debug
 do
   src=${img%%:*}; tag=${img##*:}
   base=${src##*/}
-  skopeo copy --all "docker://ghcr.io/$src:$tag" "docker://$REG/gitea-k8s-runner/$base:$tag"
+  skopeo copy --all "docker://ghcr.io/$src:$tag" "docker://$REG/gitea-runner-controller/$base:$tag"
 done
 ```
 
@@ -47,7 +47,7 @@ done
   [开发文档](../advanced/development.zh-cn.md)）：`.../controller:sha-abc123…`，比 `latest` 可复现，
   内网 `skopeo copy` 也会连 tag 一起带过去。
 - kaniko 的源在 `ghcr.io/osscontainertools/`，前两个在 `ghcr.io/vlee0203/` —— 上面的循环统一落到
-  内网仓库的 `gitea-k8s-runner/` 目录下，名字取原镜像名（`controller` / `runner` / `kaniko`）。
+  内网仓库的 `gitea-runner-controller/` 目录下，名字取原镜像名（`controller` / `runner` / `kaniko`）。
 - 目标仓库要认证时：建一个拉取凭据，并把清单里**注释掉的** `imagePullSecrets` 与
   `IMAGE_PULL_SECRET` 打开（两处名字要一致）：
 
@@ -62,15 +62,15 @@ done
 
 | 文件 | 位置 | 换成 |
 | --- | --- | --- |
-| `deploy/{namespace,cluster}/all.yaml` | `pools.yaml` 里两个池的 `image:` | `$REG/gitea-k8s-runner/runner:ubuntu-latest` |
-| 同上 | 容器 `image:` | `$REG/gitea-k8s-runner/controller:latest` |
-| 同上 | env `RUNNER_IMAGE` | `$REG/gitea-k8s-runner/runner:ubuntu-latest` |
-| 同上 | env `KANIKO_IMAGE` | `$REG/gitea-k8s-runner/kaniko:v1.28.6-debug` |
+| `deploy/{namespace,cluster}/all.yaml` | `pools.yaml` 里两个池的 `image:` | `$REG/gitea-runner-controller/runner:ubuntu-latest` |
+| 同上 | 容器 `image:` | `$REG/gitea-runner-controller/controller:latest` |
+| 同上 | env `RUNNER_IMAGE` | `$REG/gitea-runner-controller/runner:ubuntu-latest` |
+| 同上 | env `KANIKO_IMAGE` | `$REG/gitea-runner-controller/kaniko:v1.28.6-debug` |
 | `deploy/cache.yaml`（可选） | 容器 `image:` | 同上 runner 镜像 |
 
 ```bash
 # 一处漏改的后果：executor Pod 起不来（ImagePullBackOff），或 workflow 里 docker build 卡住找不到 kaniko
-sed -i "s#ghcr.io/vlee0203/gitea-k8s-runner#${REG}/gitea-k8s-runner#g; s#ghcr.io/osscontainertools/kaniko#${REG}/gitea-k8s-runner/kaniko#g" deploy/namespace/all.yaml
+sed -i "s#ghcr.io/vlee0203/gitea-runner-controller#${REG}/gitea-runner-controller#g; s#ghcr.io/osscontainertools/kaniko#${REG}/gitea-runner-controller/kaniko#g" deploy/namespace/all.yaml
 ```
 
 ## 二、搬 action

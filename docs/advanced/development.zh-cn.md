@@ -9,7 +9,7 @@ weight: 43
 ## 代码结构
 
 ```
-cmd/gitea-k8s-runner/     入口（controller 子命令）
+cmd/gitea-runner-controller/     入口（controller 子命令）
 internal/
   config/     环境变量 + pools.yaml 解析与校验
   scope/      namespace / cluster 两种作用域的差异收口（executor Pod 建在哪）
@@ -44,8 +44,8 @@ GOWORK=off go vet ./...
 
 | 镜像 | 来源 | 标签 |
 | --- | --- | --- |
-| `ghcr.io/vlee0203/gitea-k8s-runner/controller` | `container/controller.Dockerfile` | `sha-<短 commit sha>`、`latest`（main 上）；打 `vX.Y.Z` tag 时另有 `vX.Y.Z` |
-| `ghcr.io/vlee0203/gitea-k8s-runner/runner` | `container/runner.Dockerfile` | 同上，另有历史沿用的 `ubuntu-latest` |
+| `ghcr.io/vlee0203/gitea-runner-controller/controller` | `container/controller.Dockerfile` | `sha-<短 commit sha>`、`latest`（main 上）；打 `vX.Y.Z` tag 时另有 `vX.Y.Z` |
+| `ghcr.io/vlee0203/gitea-runner-controller/runner` | `container/runner.Dockerfile` | 同上，另有历史沿用的 `ubuntu-latest` |
 
 **部署清单钉的是不可变的 `sha-<短 commit sha>` 标签**，不要钉 `latest` / `ubuntu-latest` —— 那些会被下一次构建覆盖；
 标签里 `sha-<短 sha>` 也是不可变的，想用可读一点的写法就换成它。

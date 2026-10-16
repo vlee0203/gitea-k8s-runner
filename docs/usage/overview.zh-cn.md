@@ -33,7 +33,7 @@ Pod，用的就是这个池的镜像与资源。
 
 ```yaml
 - labels: [self-hosted, linux, x64, ubuntu-latest, ubuntu-24.04]
-  image: ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest
+  image: ghcr.io/vlee0203/gitea-runner-controller/runner:ubuntu-latest
   resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
   slots: 2          # 这个池最多同时跑几个 job；满了就留在 Gitea 队列等位
   timeout: 1h       # 单个 job 的执行上限（Pod 的 activeDeadlineSeconds）

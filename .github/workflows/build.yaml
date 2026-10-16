@@ -27,7 +27,7 @@ permissions:
 #
 # 多架构：linux/amd64 + linux/arm64。基础镜像都同时发布两个架构，构建阶段在
 # builder 平台上交叉编译（不需要 QEMU 跑 Go），所以多出的一架构几乎不花时间。
-# 注意：本仓库的 gitea-k8s-runner 平台自身**不能**跑这个 workflow 的多平台步骤
+# 注意：本仓库的 gitea-runner-controller 平台自身**不能**跑这个 workflow 的多平台步骤
 # （集群里没有 binfmt/QEMU，且安全基线不允许特权），自举构建请在 GitHub 上跑。
 
 jobs:

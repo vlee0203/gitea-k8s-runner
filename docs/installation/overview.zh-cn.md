@@ -63,7 +63,7 @@ kubectl apply -f deploy/cache.yaml
 ```yaml
 pools:
   - labels: [self-hosted, linux, x64, ubuntu-latest, ubuntu-24.04]
-    image: ghcr.io/vlee0203/gitea-k8s-runner/runner:ubuntu-latest
+    image: ghcr.io/vlee0203/gitea-runner-controller/runner:ubuntu-latest
     resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
     slots: 2
     timeout: 1h

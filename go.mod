@@ -1,4 +1,4 @@
-module github.com/vlee0203/gitea-k8s-runner
+module github.com/vlee0203/gitea-runner-controller
 
 go 1.26.0
 

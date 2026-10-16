@@ -233,7 +233,7 @@ case "$cmd" in
   version|--version)
     case " $* " in
       *--format*) echo "27.0.0" ;;                    # action 里常见：--format '{{.Client.Version}}'
-      *) echo "Client: Docker Engine - Community (gitea-k8s-runner kaniko shim)\nServer: kaniko (no docker daemon)" ;;
+      *) echo "Client: Docker Engine - Community (gitea-runner-controller kaniko shim)\nServer: kaniko (no docker daemon)" ;;
     esac ;;
   info)
     case " $* " in

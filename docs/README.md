@@ -4,7 +4,7 @@ slug: docs
 weight: 10
 ---
 
-# gitea-k8s-runner 文档
+# gitea-runner-controller 文档
 
 把 Gitea Actions 的 job 跑成 Kubernetes 里**一次性 Pod** 的 controller（类 GitHub ARC）。
 workflow 以 **GitHub Actions 标准**为准：`runs-on: ubuntu-latest`、`uses: actions/checkout@v4`、

@@ -9,7 +9,7 @@ import (
 	"context"
 	"log"
 
-	"github.com/vlee0203/gitea-k8s-runner/internal/executor"
+	"github.com/vlee0203/gitea-runner-controller/internal/executor"
 )
 
 // Adopter is a pool's worker: it takes over tracking for an adopted assignment.

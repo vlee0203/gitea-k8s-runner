@@ -1,4 +1,4 @@
-// Command gitea-k8s-runner runs Gitea Actions jobs as one-shot Kubernetes pods.
+// Command gitea-runner-controller runs Gitea Actions jobs as one-shot Kubernetes pods.
 // A worker claims a task from Gitea directly (so the task cannot be taken by
 // another job), then hands that exact task to a fresh executor pod through a
 // local RunnerService facade.
@@ -27,14 +27,14 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/client-go/tools/leaderelection/resourcelock"
 
-	"github.com/vlee0203/gitea-k8s-runner/internal/config"
-	"github.com/vlee0203/gitea-k8s-runner/internal/executor"
-	"github.com/vlee0203/gitea-k8s-runner/internal/facade"
-	"github.com/vlee0203/gitea-k8s-runner/internal/giteaclient"
-	"github.com/vlee0203/gitea-k8s-runner/internal/lifecycle"
-	"github.com/vlee0203/gitea-k8s-runner/internal/scope"
-	"github.com/vlee0203/gitea-k8s-runner/internal/state"
-	"github.com/vlee0203/gitea-k8s-runner/internal/worker"
+	"github.com/vlee0203/gitea-runner-controller/internal/config"
+	"github.com/vlee0203/gitea-runner-controller/internal/executor"
+	"github.com/vlee0203/gitea-runner-controller/internal/facade"
+	"github.com/vlee0203/gitea-runner-controller/internal/giteaclient"
+	"github.com/vlee0203/gitea-runner-controller/internal/lifecycle"
+	"github.com/vlee0203/gitea-runner-controller/internal/scope"
+	"github.com/vlee0203/gitea-runner-controller/internal/state"
+	"github.com/vlee0203/gitea-runner-controller/internal/worker"
 )
 
 // leaseName is the mutual-exclusion lock. Only the holder claims new tasks: a
@@ -57,7 +57,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: gitea-k8s-runner controller")
+		return errors.New("usage: gitea-runner-controller controller")
 	}
 	switch args[0] {
 	case "controller":
