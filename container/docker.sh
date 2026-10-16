@@ -21,19 +21,30 @@ SPEC=/tmp/.gkr-last-build              # 最近一次 build 的参数，push 时
 log() { echo "[docker] $*" >&2; }
 die() { log "$*"; exit 1; }
 
+# 注册表地址带协议（`https://gitea.corp.local`）是非常常见的写法 —— docker 自己会报
+# invalid reference format，而 kaniko 更阴：它把 "https" 当成 registry 主机名，报
+# `error checking push permissions … Get "https://https/v2/": EOF`（实测踩过）。
+# 这里统一剥掉协议并说一声：镜像引用与凭据里的键都只写主机名。
+strip_scheme() {
+  case "$1" in
+    *://*) log "镜像引用不该带协议，已去掉：$1 -> ${1#*://}"; printf '%s' "${1#*://}" ;;
+    *)     printf '%s' "$1" ;;
+  esac
+}
+
 # 解析 build 的参数（$@ = build 之后的所有参数），结果放进 GKR_* 变量
 parse_build() {
   GKR_TAGS=""; GKR_FILE=""; GKR_CTX=""; GKR_ARGS=""; GKR_TARGET=""; GKR_PLATFORM=""
   GKR_PUSH=0; GKR_IGNORED=""; GKR_IID=""; GKR_META=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      -t|--tag)     GKR_TAGS="$GKR_TAGS $2"; shift 2 ;;
+      -t|--tag)     GKR_TAGS="$GKR_TAGS $(strip_scheme "$2")"; shift 2 ;;
       -f|--file)    GKR_FILE=$2; shift 2 ;;
       --build-arg)  GKR_ARGS="$GKR_ARGS $2"; shift 2 ;;
       --target)     GKR_TARGET=$2; shift 2 ;;
       --platform)   GKR_PLATFORM=$2; shift 2 ;;
       # —— 等号形式：--flag=value ——
-      --tag=*)         GKR_TAGS="$GKR_TAGS ${1#*=}"; shift ;;
+      --tag=*)         GKR_TAGS="$GKR_TAGS $(strip_scheme "${1#*=}")"; shift ;;
       --file=*)        GKR_FILE=${1#*=}; shift ;;
       --build-arg=*)   GKR_ARGS="$GKR_ARGS ${1#*=}"; shift ;;
       --target=*)      GKR_TARGET=${1#*=}; shift ;;
@@ -82,7 +93,7 @@ submit() {
   [ -z "$GKR_TARGET" ]   || printf '%s\n' "--target" "$GKR_TARGET" >> "$dir/args"
   [ -z "$GKR_PLATFORM" ] || printf '%s\n' "--custom-platform" "$GKR_PLATFORM" >> "$dir/args"
   if [ -n "${GKR_DEST:-}" ]; then
-    for d in $GKR_DEST; do printf '%s\n' "--destination=$d" >> "$dir/args"; done
+    for d in $GKR_DEST; do printf '%s\n' "--destination=$(strip_scheme "$d")" >> "$dir/args"; done
   else
     printf '%s\n' "--no-push" >> "$dir/args"
   fi
@@ -145,6 +156,8 @@ case "$cmd" in
       esac
     done
     [ -n "$host" ] || die "login 需要 registry 地址：docker login <host> -u <user> -p <pass>"
+    # config.json 的键要与 kaniko 查找时用的主机名一致，带协议会匹配不上凭据
+    host=$(strip_scheme "$host")
     mkdir -p "$(dirname "$CREDS")"
     auth=$(printf '%s:%s' "$user" "$pass" | base64 | tr -d '\n')
     printf '{"auths":{"%s":{"auth":"%s"}}}' "$host" "$auth" > "$CREDS"

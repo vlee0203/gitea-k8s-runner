@@ -266,6 +266,7 @@ action 下载与 checkout 也走它。只有这两种情况要执行 Pod 自己�
 | Pod 被驱逐，`exceeded its local ephemeral storage limit` | 命名空间 LimitRange 的默认值太小，池里没显式给 `ephemeralStorage` |
 | `cache` Deployment 一直 Pending | 没有可用 StorageClass（`cache.yaml` 是可选组件，直接跳过） |
 | workflow 里 `docker build` 卡住/找不到 kaniko | `KANIKO_IMAGE` 没换成内网地址 |
+| 构建报 `error checking push permissions … Get "https://https/v2/": EOF` | 镜像引用里带了协议（`docker build -t https://gitea…/img:tag`）：kaniko 把 `https` 当成了 registry 主机名。把 `REGISTRY`（或 secret）里的 `https://` 去掉；新 runner 镜像的 `docker` 替身会自动剥掉协议并告警 |
 
 ## 七、做成 Sealos 模板时的注意点
 
