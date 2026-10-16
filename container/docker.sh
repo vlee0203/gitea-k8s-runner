@@ -38,13 +38,13 @@ parse_build() {
   GKR_PUSH=0; GKR_IGNORED=""; GKR_IID=""; GKR_META=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      -t|--tag)     GKR_TAGS="$GKR_TAGS $(strip_scheme "$2")"; shift 2 ;;
+      -t|--tag)     GKR_TAGS="$GKR_TAGS $2"; shift 2 ;;
       -f|--file)    GKR_FILE=$2; shift 2 ;;
       --build-arg)  GKR_ARGS="$GKR_ARGS $2"; shift 2 ;;
       --target)     GKR_TARGET=$2; shift 2 ;;
       --platform)   GKR_PLATFORM=$2; shift 2 ;;
       # —— 等号形式：--flag=value ——
-      --tag=*)         GKR_TAGS="$GKR_TAGS $(strip_scheme "${1#*=}")"; shift ;;
+      --tag=*)         GKR_TAGS="$GKR_TAGS ${1#*=}"; shift ;;
       --file=*)        GKR_FILE=${1#*=}; shift ;;
       --build-arg=*)   GKR_ARGS="$GKR_ARGS ${1#*=}"; shift ;;
       --target=*)      GKR_TARGET=${1#*=}; shift ;;
@@ -93,7 +93,23 @@ submit() {
   [ -z "$GKR_TARGET" ]   || printf '%s\n' "--target" "$GKR_TARGET" >> "$dir/args"
   [ -z "$GKR_PLATFORM" ] || printf '%s\n' "--custom-platform" "$GKR_PLATFORM" >> "$dir/args"
   if [ -n "${GKR_DEST:-}" ]; then
-    for d in $GKR_DEST; do printf '%s\n' "--destination=$(strip_scheme "$d")" >> "$dir/args"; done
+    # 引用里带 http:// 就是"这台 registry 是 80、走明文" —— 剥掉协议的同时必须把它告诉 kaniko。
+    # 为什么不靠 kaniko 自己判：go-containerregistry 只在私有网段/localhost/loopback/.local 才降级
+    # 成 http，其余一律 https；所以 http:// 的公共域名（内网常见的 gitea.corp.local 之类）不显式
+    # 指定就会用 https 去连。https:// 与不写协议同为默认（443），只需剥掉协议。
+    insecure=""
+    for d in $GKR_DEST; do
+      case "$d" in
+        http://*) h=${d#*://}; insecure="$insecure ${h%%/*}" ;;
+      esac
+      printf '%s\n' "--destination=$(strip_scheme "$d")" >> "$dir/args"
+    done
+    seen=""
+    for h in $insecure; do
+      case " $seen " in *" $h "*) continue ;; esac
+      seen="$seen $h"
+      printf '%s\n' "--insecure-registry=$h" >> "$dir/args"
+    done
   else
     printf '%s\n' "--no-push" >> "$dir/args"
   fi
