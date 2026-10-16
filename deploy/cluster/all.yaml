@@ -124,10 +124,10 @@ spec:
       automountServiceAccountToken: true
       terminationGracePeriodSeconds: 3660
       # 私有镜像仓库需要凭据时才启用（名字自取，要和下面容器里的 IMAGE_PULL_SECRET 一致）：
-      #   kubectl -n <ns> create secret docker-registry <name> \
-      #     --docker-server=<registry> --docker-username=<user> --docker-password=<pass>
+      # kubectl -n <ns> create secret docker-registry <name> \
+      # --docker-server=<registry> --docker-username=<user> --docker-password=<pass>
       # imagePullSecrets:
-      #   - name: registry-pull
+      # - name: registry-pull
       containers:
         - name: controller
           image: ghcr.io/vlee0203/gitea-runner-controller/controller:sha-b2de794
@@ -144,8 +144,7 @@ spec:
               memory: 1Gi
               ephemeral-storage: 1Gi
           ports:
-            -
-              name: http
+            - name: http
               containerPort: 8080
           # readiness = "facade 已在监听"。服务是无状态的（facade 按 assignment 的 Secret
           # 解析每条 job），所以任何实例都能服务任何执行 Pod，探针通过即可接流量。
@@ -156,52 +155,85 @@ spec:
             periodSeconds: 5
             failureThreshold: 2
           env:
-            -
-              name: GITEA_INSTANCE_URL
+            - name: GITEA_INSTANCE_URL
               value: "https://gitea.example.com"
-            -
-              name: SCOPE
+            - name: SCOPE
               value: cluster
-            -
-              name: TARGET_NAMESPACE
+            - name: TARGET_NAMESPACE
               value: gitea-runner-controller
             # 注册令牌从 Secret 经 API 读；也可改回挂文件（REGISTRATION_TOKEN_FILE + 下方注释里的 volume），
             # 但那样令牌会落在 Pod 文件系统里，且换令牌要重启。
-            -
-              name: REGISTRATION_TOKEN_SECRET
+            - name: REGISTRATION_TOKEN_SECRET
               value: gitea-runner-controller-registration
             # 执行 Pod 用它连本 controller（runner 的 --instance 目标）；名字即所指，别再叫 facade
-            -
-              name: CONTROLLER_URL
+            - name: CONTROLLER_URL
               value: "http://gitea-runner-controller:8080"
-            -
-              name: POOLS_FILE
+            - name: POOLS_FILE
               value: /etc/pools/pools.yaml
             # drain：在跑的 job 最多等这么久，超时才取消（并报 task 失败供 rerun）
-            -
-              name: SHUTDOWN_TIMEOUT
+            - name: SHUTDOWN_TIMEOUT
               value: 30m
             # drain 期间某个 job 静默这么久（没再跟 controller 说过话）就判定卡死、单独取消它，
             # 不让一个卡死的 job 把整个发布堵满 SHUTDOWN_TIMEOUT
-            -
-              name: DRAIN_SILENCE
+            - name: DRAIN_SILENCE
               value: 10m
             # 共享缓存（deploy/cache.yaml）**才**会创建 ConfigMap gitea-runner-controller-cache-config；
             # 没应用它就别打开下面两行。两行的值要与那份 ConfigMap 里的 external_secret 一致。
-            # - { name: CACHE_SERVER_URL, value: "http://gitea-runner-controller-cache:8088/" }
-            # - { name: CACHE_SERVER_SECRET, value: <与 cache ConfigMap 里 external_secret 相同的值> }
-            # Gitea 用自签/企业 CA 时打开（连同上面的 SSL_CERT_DIR 与 volumeMount）。
-        # 规范要求：CM 名 = 挂载它的应用名，且一个应用只有一个 CM、键按 vn- 转换 —— 所以**不要**
-        # 另建一个 CA 专用的 ConfigMap，而是把 CA 作为 vn- 键加进这个应用自己的 pools CM：
-        #   挂载点 /etc/grc-ca/ca.crt → 键名 vn-etcvn-grcvn-cavn-ca.crt
-        #   printf 'data:\n  vn-etcvn-grcvn-cavn-ca.crt: |\n' > /tmp/ca-patch.yaml
-        #   sed 's/^/    /' ca-bundle.crt >> /tmp/ca-patch.yaml
-        #   kubectl -n <ns> patch configmap gitea-runner-controller-pools --type=merge --patch-file=/tmp/ca-patch.yaml
-        # 加完再打开上面的 EXECUTOR_CA_PATH（配了却读不到，controller 会起不来，故意的）。
-        # - name: vn-etcvn-grcvn-ca
-        #   configMap:
-        #     name: gitea-runner-controller-pools
-        #     items: [{ key: vn-etcvn-grcvn-cavn-ca.crt, path: ca.crt }]
+            # - name: CACHE_SERVER_URL
+              # value: "http://gitea-runner-controller-cache:8088/"
+            # - name: CACHE_SERVER_SECRET
+              # value: <与 cache ConfigMap 里 external_secret 相同的值>
+            # Gitea 用自签/企业 CA 时打开（另见文件末尾 vn-etcvn-grcvn-ca 卷的注释）：
+            # ① controller 自己得先信任它 —— 注册 runner、facade 反代到 Gitea 都走 TLS：
+            # - name: SSL_CERT_DIR
+              # value: "/etc/ssl/certs:/etc/grc-ca"
+            # 用 SSL_CERT_DIR 而不是 SSL_CERT_FILE：两者都是"替换"语义，只给自定义 CA 会把系统根证书顶掉；
+            # 把 /etc/ssl/certs 一并列上，自定义 CA 与公网根证书才同时可用（实测过）。
+            # ② 执行 Pod（workflow 往自签 registry 推镜像 / 从自签 Gitea 取 action 时）也信任同一份：
+            # 这行只认**路径** —— 指向上面那个挂载点（或其中某个证书文件）；挂的是 Secret 还是
+            # ConfigMap、key 叫什么名字都不用管。配了却读不到，controller 直接起不来（故意的）。
+            # - name: EXECUTOR_CA_PATH
+              # value: /etc/grc-ca
+            # executor Pod 的 imagePullSecrets（上面那个 secret 的名字）；仓库可匿名拉取就留空。
+            # - name: IMAGE_PULL_SECRET
+              # value: registry-pull
+            # injectRunner 的池从该镜像取 gitea-runner 二进制（静态 Go，busybox 下可跑）。
+            - name: RUNNER_IMAGE
+              value: 'ghcr.io/vlee0203/gitea-runner-controller/runner:sha-b2de794'
+            # 出网需要代理时：在 controller 上设这三个（平台会自动注入每个 executor Pod，
+            # 并把 Gitea/facade/cache 等集群内地址追加进 NO_PROXY，另自动加 NODE_USE_ENV_PROXY=1）。
+            # - name: HTTP_PROXY
+              # value: "http://proxy.example.com:3128"
+            # - name: HTTPS_PROXY
+              # value: "http://proxy.example.com:3128"
+            # - name: NO_PROXY
+              # value: "10.0.0.0/8,192.168.0.0/16,.example.com"
+            # 官方 kaniko 镜像：job 里出现 docker build/push/login（或 docker/* 官方 action）时，
+            # 该 job 的 Pod 里会多加一个待命的 kaniko 容器，runner 容器里的 `docker` 替身把构建交给它
+            # （kaniko 必须作为它自己的镜像运行）。不配则不支持 workflow 内构建镜像。
+            - name: KANIKO_IMAGE
+              value: ghcr.io/osscontainertools/kaniko:v1.28.6-debug
+          volumeMounts:
+            - name: pools
+              mountPath: /etc/pools
+              readOnly: true
+            # - name: grc-ca
+              # mountPath: /etc/grc-ca
+              # readOnly: true
+      volumes:
+        - name: pools
+          configMap:
+            name: gitea-runner-controller-pools
+        # Gitea 用自签/企业 CA 时打开（连同上面的 SSL_CERT_DIR 与 volumeMount）。
+        # 规范要求 CM 名 = 挂载它的应用名、一个应用一个 CM、键与卷名走 vn- 规则 —— 不另建 CA 专用对象：
+        # 上面的 EXECUTOR_CA_PATH 指的就是这个挂载点 —— 一份 CA、一个对象，执行 Pod 不再建第二个：
+        # kubectl -n <ns> create secret generic gitea-ca --from-file=corp-ca.crt
+        # 不写 items：整个挂进来，Go 扫目录下每个文件，key 叫什么名字（--from-file 的文件名）由你定。
+        # 用 ConfigMap 装也一样（CA 是公开材料），把上面的 SSL_CERT_DIR 与 EXECUTOR_CA_PATH 指对即可。
+        # 先建好这个对象再部署：配了 ② 时读不到 CA，controller 会起不来，别拿 optional: true 兜底。
+        # - name: grc-ca
+        # secret:
+        # secretName: gitea-ca
 ---
 apiVersion: v1
 kind: Service
@@ -212,7 +244,6 @@ spec:
   selector:
     app: gitea-runner-controller
   ports:
-    -
-      name: http
+    - name: http
       port: 8080
       targetPort: http
