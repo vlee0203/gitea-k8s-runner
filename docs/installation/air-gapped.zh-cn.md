@@ -91,6 +91,8 @@ sed -i "s#ghcr.io/vlee0203/gitea-runner-controller#${REG}/gitea-runner-controlle
 - 幂等：目标仓库已有 tags 就跳过；要强制重推翻加 `--repush`。
 - 只补一个 action（比如以后要用 `actions/setup-ruby`）：两条命令都加 `--only actions/setup-ruby`
   （该仓库需要先加进脚本顶部的 `ACTIONS` 列表）。
+- 走代理而不是搬 action 的话：`uses:` 的 action 由 **runner 进程**下载，**只认执行 Pod 的环境变量**，
+  所以在 **controller** 上配 `HTTP_PROXY/HTTPS_PROXY/NO_PROXY`（清单里那三行注释态）——工作流里设的代理对它无效。
 - 只搬了 `v*`：workflow 里 `uses: xxx@master` 这类非 `v*` 的 ref 拿不到。
 
 ## 三、目标 Gitea 的配置

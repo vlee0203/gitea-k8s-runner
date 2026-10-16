@@ -87,7 +87,14 @@ Gitea 侧留了半成品目录：删掉该仓库重来，或改走上面这条"�
 | 组织 Owners 只留管理员 | 管理后台/`PUT /teams/{id}/members/{username}` | 谁改这些仓库 = 往所有引用它的 job 注入代码 | ✅ `actions`/`docker` 的 Owners 现在只有 `admin` |
 
 若实例**能出网**，还有第三条路可选：把 `DEFAULT_ACTIONS_URL` 改回 `github`（`GITEA__actions__DEFAULT_ACTIONS_URL=github`），
-名字解析回 github.com，实例上谁注册了什么都不影响；代价是每个 job 都要去外网取 action。本实例保留 `self` +
+名字解析回 github.com，实例上谁注册了什么都不影响；> **代理这一环容易踩**：`uses:` 的 action 是 **runner 进程**去下载的，只认**执行 Pod 的环境变量**
+> （平台从 controller 注入）；工作流 / 仓库 secret 里设的代理对它**无效**（实测：工作流级 + job 级都设
+> `HTTPS_PROXY=http://127.0.0.1:9` 死代理，`Download action repository` 照样成功）。所以：要么在
+> **controller** 上配代理（清单里有现成三行 `HTTP_PROXY/HTTPS_PROXY/NO_PROXY`，注释态，打开即可；
+> 平台会注入每个执行 Pod，并自动把集群内地址追加进 `NO_PROXY`），要么把 action 搬进内网 Gitea ——
+> 后者完全不吃代理。
+
+代价是每个 job 都要去外网取 action。本实例保留 `self` +
 上面的收口，走的是"完全不吃外网"这条路。
 
 单个步骤想用别的来源时，`uses:` 支持绝对 URL（`uses: https://github.com/actions/setup-go@v5`）以及
