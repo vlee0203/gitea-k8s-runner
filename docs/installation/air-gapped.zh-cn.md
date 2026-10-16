@@ -80,6 +80,8 @@ sed -i "s#ghcr.io/vlee0203/gitea-runner-controller#${REG}/gitea-runner-controlle
 ```bash
 # ① 在能出网、能访问 github.com 的机器上打包（有 HTTP(S)_PROXY 会自动走）
 ./scripts/mirror-actions.sh export --out actions-bundle.tar     # 23 个 action，体积百 MB 级
+# 出网不稳时：可从已镜像好的实例打包，绕开 github —— 加 --from https://<已镜像的 Gitea>
+# ./scripts/mirror-actions.sh export --from https://gitea.example.com --out actions-bundle.tar
 
 # ② 把 tar 带进内网，在能同时访问 tar 和内网 Gitea 的机器上导入
 ./scripts/mirror-actions.sh import \
