@@ -140,19 +140,17 @@ Gitea；controller 侧全代码没有 `InsecureSkipVerify`，走标准证书校�
 
 ```bash
 cat middle.crt root-ca.crt > ca-bundle.crt          # 顺序无所谓，都是 PEM 块
-kubectl -n <应用命名空间> create configmap grc-ca --from-file=corp-ca.crt
+# 规范：CM 名 = 挂载它的应用名，一个应用只有一个 CM、键按 vn- 转换 → CA 加进**应用自己的**CM
+printf 'data:\n  vn-etcvn-grcvn-cavn-ca.crt: |\n' > /tmp/ca-patch.yaml
+sed 's/^/    /' ca-bundle.crt >> /tmp/ca-patch.yaml
+kubectl -n <应用命名空间> patch configmap <应用的 ConfigMap 名> --type=merge --patch-file=/tmp/ca-patch.yaml
 ```
 
-ConfigMap 的形态（要手写就用这个框架，值自己填）：
+键名按 vn- 规则由挂载路径推出（`/etc/grc-ca/ca.crt` → `vn-etcvn-grcvn-cavn-ca.crt`），值是 PEM 文本：
 
 ```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: grc-ca
-  namespace: <应用命名空间>
 data:
-  corp-ca.crt: |            # key 名随你（就是 --from-file 用到的文件名），代码不认某个固定名字
+  vn-etcvn-grcvn-cavn-ca.crt: |            # key 名随你（就是 --from-file 用到的文件名），代码不认某个固定名字
     -----BEGIN CERTIFICATE-----
     <中间证书 middle>
     -----END CERTIFICATE-----
@@ -170,12 +168,13 @@ data:
             - name: SSL_CERT_DIR
               value: /etc/ssl/certs:/etc/grc-ca
           volumeMounts:
-            - { name: grc-ca, mountPath: /etc/grc-ca, readOnly: true }
+            - { name: vn-etcvn-grcvn-ca, mountPath: /etc/grc-ca, readOnly: true }
       volumes:
-        - name: grc-ca
-          # 不写 items：整个 ConfigMap 挂进来、目录下每个文件都会被扫到，key 名不必是 ca.crt
+        - name: vn-etcvn-grcvn-ca
+          # 挂的是应用自己的那个 CM（规范：CM 名 = 挂载它的应用名）；用 items 只取 CA 那一个键
           configMap:
-            name: grc-ca
+            name: <应用的 ConfigMap 名>
+            items: [{ key: vn-etcvn-grcvn-cavn-ca.crt, path: ca.crt }]
 ```
 
 **② 执行 Pod 也信任同一份**：把这**同一个挂载点（或其中某个证书文件）的路径**填进 `EXECUTOR_CA_PATH`
