@@ -21,7 +21,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: gitea-runner-controller-cache
 spec:
-  accessModes: ["ReadWriteOnce"]
+  accessModes:
+    - "ReadWriteOnce"
   resources:
     requests:
       storage: 10Gi
@@ -36,10 +37,12 @@ spec:
   strategy:
     type: Recreate
   selector:
-    matchLabels: { app: gitea-runner-controller-cache }
+    matchLabels:
+      app: gitea-runner-controller-cache
   template:
     metadata:
-      labels: { app: gitea-runner-controller-cache }
+      labels:
+        app: gitea-runner-controller-cache
     spec:
       # cache-server 不调 K8s API；不写这行的话默认会挂一个用不到的 default SA 令牌
       automountServiceAccountToken: false
@@ -54,8 +57,14 @@ spec:
           resources:
             # requests 与 limits 同值（这类短命工作负载不需要超卖）；ephemeralStorage 必须显式给，
             # 否则会被命名空间 LimitRange 的默认值（usw 实测 100Mi）注入，写满即被驱逐
-            requests: { cpu: 50m, memory: 100Mi, ephemeral-storage: 1Gi }
-            limits: { cpu: 500m, memory: 1Gi, ephemeral-storage: 1Gi }
+            requests:
+              cpu: 50m
+              memory: 100Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+              ephemeral-storage: 1Gi
           image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-b2de794
           command:
             - /usr/local/bin/gitea-runner
@@ -63,21 +72,34 @@ spec:
             - --config
             - /etc/cache/config.yaml
           ports:
-            - { name: http, containerPort: 8088 }
+            -
+              name: http
+              containerPort: 8088
           volumeMounts:
-            - { name: cache, mountPath: /cache }
-            - { name: config, mountPath: /etc/cache, readOnly: true }
+            -
+              name: cache
+              mountPath: /cache
+            -
+              name: config
+              mountPath: /etc/cache
+              readOnly: true
       volumes:
         - name: config
-          configMap: { name: gitea-runner-controller-cache-config }
+          configMap:
+            name: gitea-runner-controller-cache-config
         - name: cache
-          persistentVolumeClaim: { claimName: gitea-runner-controller-cache }
+          persistentVolumeClaim:
+            claimName: gitea-runner-controller-cache
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: gitea-runner-controller-cache
 spec:
-  selector: { app: gitea-runner-controller-cache }
+  selector:
+    app: gitea-runner-controller-cache
   ports:
-    - { name: http, port: 8088, targetPort: http }
+    -
+      name: http
+      port: 8088
+      targetPort: http

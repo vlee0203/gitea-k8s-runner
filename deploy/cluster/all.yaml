@@ -14,14 +14,30 @@ metadata:
   name: gitea-runner-controller
 rules:
   - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["create", "get", "list", "watch", "delete"]
+    resources:
+      - "pods"
+    verbs:
+      - "create"
+      - "get"
+      - "list"
+      - "watch"
+      - "delete"
   - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["create", "get", "list", "update", "delete"]
+    resources:
+      - "secrets"
+    verbs:
+      - "create"
+      - "get"
+      - "list"
+      - "update"
+      - "delete"
   - apiGroups: ["coordination.k8s.io"]
-    resources: ["leases"]
-    verbs: ["create", "get", "update"]
+    resources:
+      - "leases"
+    verbs:
+      - "create"
+      - "get"
+      - "update"
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -63,14 +79,20 @@ data:
     pools:
       - labels: [self-hosted, linux, x64, ubuntu-latest, ubuntu-24.04]
         image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-b2de794
-        resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
+        resources:
+          cpu: "2"
+          memory: 4Gi
+          ephemeralStorage: 10Gi
         slots: 2
         timeout: 1h
       # 第二个池只是"更大规格 + 自带标签"，镜像与上一个相同：workflow 里的 docker 构建
       # 由平台自动附加的 kaniko 容器完成（见 KANIKO_IMAGE），不需要专用构建镜像。
       - labels: [self-hosted, build]
         image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-b2de794
-        resources: { cpu: "2", memory: 4Gi, ephemeralStorage: 10Gi }
+        resources:
+          cpu: "2"
+          memory: 4Gi
+          ephemeralStorage: 10Gi
         slots: 1
         timeout: 1h
 ---
@@ -85,13 +107,17 @@ spec:
     # 把它手上的 job 服务完（执行 Pod 只认老实例的 facade），随后退出、租约过期、新实例接管。
     # 用 Recreate 的话，老实例一天不退出，新实例连启动都等不到 —— 卡死的 job 会把发布堵死。
     type: RollingUpdate
-    rollingUpdate: { maxSurge: 1, maxUnavailable: 1 }
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
   replicas: 1
   selector:
-    matchLabels: { app: gitea-runner-controller }
+    matchLabels:
+      app: gitea-runner-controller
   template:
     metadata:
-      labels: { app: gitea-runner-controller }
+      labels:
+        app: gitea-runner-controller
     spec:
       serviceAccountName: gitea-runner-controller
       # controller 要调 K8s API（建/删 Pod、读状态 Secret）→ 直接开自动挂载，用默认注入的 SA 令牌
@@ -109,32 +135,57 @@ spec:
           resources:
             # requests 与 limits 同值（这类短命工作负载不需要超卖）；ephemeralStorage 必须显式给，
             # 否则会被命名空间 LimitRange 的默认值（usw 实测 100Mi）注入，写满即被驱逐
-            requests: { cpu: 50m, memory: 100Mi, ephemeral-storage: 1Gi }
-            limits: { cpu: 500m, memory: 1Gi, ephemeral-storage: 1Gi }
+            requests:
+              cpu: 50m
+              memory: 100Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+              ephemeral-storage: 1Gi
           ports:
-            - { name: http, containerPort: 8080 }
+            -
+              name: http
+              containerPort: 8080
           # readiness = "facade 已在监听"。服务是无状态的（facade 按 assignment 的 Secret
           # 解析每条 job），所以任何实例都能服务任何执行 Pod，探针通过即可接流量。
           # 故意不配 liveness：drain 期间进程要一直活着把它手上的 job 服务完。
           readinessProbe:
-            tcpSocket: { port: 8080 }
+            tcpSocket:
+              port: 8080
             periodSeconds: 5
             failureThreshold: 2
           env:
-            - { name: GITEA_INSTANCE_URL, value: "https://gitea.example.com" }
-            - { name: SCOPE, value: cluster }
-            - { name: TARGET_NAMESPACE, value: gitea-runner-controller }
+            -
+              name: GITEA_INSTANCE_URL
+              value: "https://gitea.example.com"
+            -
+              name: SCOPE
+              value: cluster
+            -
+              name: TARGET_NAMESPACE
+              value: gitea-runner-controller
             # 注册令牌从 Secret 经 API 读；也可改回挂文件（REGISTRATION_TOKEN_FILE + 下方注释里的 volume），
             # 但那样令牌会落在 Pod 文件系统里，且换令牌要重启。
-            - { name: REGISTRATION_TOKEN_SECRET, value: gitea-runner-controller-registration }
+            -
+              name: REGISTRATION_TOKEN_SECRET
+              value: gitea-runner-controller-registration
             # 执行 Pod 用它连本 controller（runner 的 --instance 目标）；名字即所指，别再叫 facade
-            - { name: CONTROLLER_URL, value: "http://gitea-runner-controller:8080" }
-            - { name: POOLS_FILE, value: /etc/pools/pools.yaml }
+            -
+              name: CONTROLLER_URL
+              value: "http://gitea-runner-controller:8080"
+            -
+              name: POOLS_FILE
+              value: /etc/pools/pools.yaml
             # drain：在跑的 job 最多等这么久，超时才取消（并报 task 失败供 rerun）
-            - { name: SHUTDOWN_TIMEOUT, value: 30m }
+            -
+              name: SHUTDOWN_TIMEOUT
+              value: 30m
             # drain 期间某个 job 静默这么久（没再跟 controller 说过话）就判定卡死、单独取消它，
             # 不让一个卡死的 job 把整个发布堵满 SHUTDOWN_TIMEOUT
-            - { name: DRAIN_SILENCE, value: 10m }
+            -
+              name: DRAIN_SILENCE
+              value: 10m
             # 共享缓存（deploy/cache.yaml）**才**会创建 ConfigMap gitea-runner-controller-cache-config；
             # 没应用它就别打开下面两行。两行的值要与那份 ConfigMap 里的 external_secret 一致。
             # - { name: CACHE_SERVER_URL, value: "http://gitea-runner-controller-cache:8088/" }
@@ -158,6 +209,10 @@ metadata:
   name: gitea-runner-controller
   namespace: gitea-runner-controller
 spec:
-  selector: { app: gitea-runner-controller }
+  selector:
+    app: gitea-runner-controller
   ports:
-    - { name: http, port: 8080, targetPort: http }
+    -
+      name: http
+      port: 8080
+      targetPort: http

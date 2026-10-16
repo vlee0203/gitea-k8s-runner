@@ -168,13 +168,19 @@ data:
             - name: SSL_CERT_DIR
               value: /etc/ssl/certs:/etc/grc-ca
           volumeMounts:
-            - { name: vn-etcvn-grcvn-ca, mountPath: /etc/grc-ca, readOnly: true }
+            -
+              name: vn-etcvn-grcvn-ca
+              mountPath: /etc/grc-ca
+              readOnly: true
       volumes:
         - name: vn-etcvn-grcvn-ca
           # 挂的是应用自己的那个 CM（规范：CM 名 = 挂载它的应用名）；用 items 只取 CA 那一个键
           configMap:
             name: <应用的 ConfigMap 名>
-            items: [{ key: vn-etcvn-grcvn-cavn-ca.crt, path: ca.crt }]
+            items:
+              -
+                key: vn-etcvn-grcvn-cavn-ca.crt
+                path: ca.crt
 ```
 
 **② 执行 Pod 也信任同一份**：把这**同一个挂载点（或其中某个证书文件）的路径**填进 `EXECUTOR_CA_PATH`
