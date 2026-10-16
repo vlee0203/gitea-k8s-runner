@@ -169,13 +169,13 @@ spec:
           configMap: { name: gitea-runner-controller-pools }
         # Gitea 用自签/企业 CA 时打开（连同上面的 SSL_CERT_DIR 与 volumeMount）。
         # 上面的 EXECUTOR_CA_PATH 指的就是这个挂载点 —— 一份 CA、一个对象，执行 Pod 不再建第二个：
-        #   kubectl -n <ns> create secret generic gitea-ca --from-file=corp-ca.crt
-        # 不写 items：整个挂进来，Go 扫目录下每个文件，key 叫什么名字（--from-file 的文件名）由你定。
-        # 用 ConfigMap 装也一样（CA 是公开材料），把上面的 SSL_CERT_DIR 与 EXECUTOR_CA_PATH 指对即可。
+        #   kubectl -n <ns> create configmap grc-ca --from-file=corp-ca.crt
+        # CA 是公开材料 → 用 ConfigMap（不用 Secret）；不写 items：整个挂进来，Go 扫目录下每个文件，
+        # key 叫什么名字（--from-file 的文件名）由你定。
         # 先建好这个对象再部署：配了 ② 时读不到 CA，controller 会起不来，别拿 optional: true 兜底。
         # - name: grc-ca
-        #   secret:
-        #     secretName: gitea-ca
+        #   configMap:
+        #     name: grc-ca
 ---
 apiVersion: v1
 kind: Service

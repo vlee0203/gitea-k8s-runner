@@ -140,19 +140,18 @@ Gitea；controller 侧全代码没有 `InsecureSkipVerify`，走标准证书校�
 
 ```bash
 cat middle.crt root-ca.crt > ca-bundle.crt          # 顺序无所谓，都是 PEM 块
-kubectl -n <应用命名空间> create secret generic gitea-ca --from-file=corp-ca.crt
+kubectl -n <应用命名空间> create configmap grc-ca --from-file=corp-ca.crt
 ```
 
-Secret 的形态（要手写就用这个框架，值自己填）：
+ConfigMap 的形态（要手写就用这个框架，值自己填）：
 
 ```yaml
 apiVersion: v1
-kind: Secret
+kind: ConfigMap
 metadata:
-  name: gitea-ca
+  name: grc-ca
   namespace: <应用命名空间>
-type: Opaque
-stringData:
+data:
   corp-ca.crt: |            # key 名随你（就是 --from-file 用到的文件名），代码不认某个固定名字
     -----BEGIN CERTIFICATE-----
     <中间证书 middle>
@@ -171,12 +170,12 @@ stringData:
             - name: SSL_CERT_DIR
               value: /etc/ssl/certs:/etc/grc-ca
           volumeMounts:
-            - { name: gitea-ca, mountPath: /etc/grc-ca, readOnly: true }
+            - { name: grc-ca, mountPath: /etc/grc-ca, readOnly: true }
       volumes:
-        - name: gitea-ca
-          # 不写 items：整个 Secret 挂进来、目录下每个文件都会被扫到，key 名不必是 ca.crt
-          secret:
-            secretName: gitea-ca
+        - name: grc-ca
+          # 不写 items：整个 ConfigMap 挂进来、目录下每个文件都会被扫到，key 名不必是 ca.crt
+          configMap:
+            name: grc-ca
 ```
 
 **② 执行 Pod 也信任同一份**：把这**同一个挂载点（或其中某个证书文件）的路径**填进 `EXECUTOR_CA_PATH`
