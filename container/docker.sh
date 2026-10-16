@@ -128,6 +128,16 @@ submit() {
   fi
   [ -n "$merged_no" ] && printf 'NO_PROXY=%s\nno_proxy=%s\n' "$merged_no" "$merged_no" >> "$dir/env"
   log "转交代理设置给 kaniko 容器：$(tr '\n' ' ' < "$dir/env")"
+  # 上面那份 env 只作用于 kaniko 自己（拉基础镜像、推镜像）。**构建步骤里的 RUN** 要出网
+  # （go mod download / npm ci / pip install …）得另走一路：kaniko 不会把它的环境带进 RUN
+  # （实测：给 kaniko 设了 HTTPS_PROXY，RUN 里 `env | grep -i _proxy` 什么都没有），
+  # 而 `--build-arg HTTP(S)_PROXY/NO_PROXY` 会进构建环境（实测，Dockerfile 不用声明 ARG）——
+  # 真 docker 也正是"自动带这几个"。所以照做。
+  for name in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy; do
+    eval "v=\${$name:-}"
+    [ -n "$v" ] && printf '%s\n' "--build-arg=$name=$v" >> "$dir/args"
+  done
+  [ -n "$merged_no" ] && printf '%s\n' "--build-arg=NO_PROXY=$merged_no" "--build-arg=no_proxy=$merged_no" >> "$dir/args"
   : > "$dir/go"                       # 准备就绪，kaniko 容器可以开工
   log "已交给 kaniko 容器：$(tr '\n' ' ' < "$dir/args")"
 
