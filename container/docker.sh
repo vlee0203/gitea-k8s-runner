@@ -113,10 +113,9 @@ submit() {
   else
     printf '%s\n' "--no-push" >> "$dir/args"
   fi
-  printf '%s\n' "--verbosity=info" >> "$dir/args"
-  # 把本次步骤看到的代理设置一并交给 kaniko 容器（构建走的是另一个容器，只拿到平台注入的那份；
-  # workflow / 仓库 secret 里自带代理时，不转交的话拉基础镜像与推镜像会绕开它）。
-  # NO_PROXY 采用"用户那份 + 平台那份"的合并，避免用户漏写集群内地址而把内网流量送进代理。
+  # warn：只留构建步骤的输出与错误，kaniko 的内部流水不进 job 日志；摘要走 --digest-file
+  printf '%s\n' "--verbosity=warn" >> "$dir/args"
+  printf '%s\n' "--digest-file" "$dir/digest" >> "$dir/args"
   : > "$dir/env"
   for pair in "HTTP_PROXY:${HTTP_PROXY:-}" "http_proxy:${http_proxy:-}" "HTTPS_PROXY:${HTTPS_PROXY:-}" "https_proxy:${https_proxy:-}"; do
     k=${pair%%:*}; v=${pair#*:}
@@ -127,21 +126,16 @@ submit() {
     merged_no=$(printf '%s' "${merged_no:+$merged_no,}${GRC_PLATFORM_NO_PROXY}")
   fi
   [ -n "$merged_no" ] && printf 'NO_PROXY=%s\nno_proxy=%s\n' "$merged_no" "$merged_no" >> "$dir/env"
-  log "转交代理设置给 kaniko 容器：$(tr '\n' ' ' < "$dir/env")"
-  # 上面那份 env 只作用于 kaniko 自己（拉基础镜像、推镜像）。**构建步骤里的 RUN** 要出网
-  # （go mod download / npm ci / pip install …）得另走一路：kaniko 不会把它的环境带进 RUN
-  # （实测：给 kaniko 设了 HTTPS_PROXY，RUN 里 `env | grep -i _proxy` 什么都没有），
-  # 而 `--build-arg HTTP(S)_PROXY/NO_PROXY` 会进构建环境（实测，Dockerfile 不用声明 ARG）——
-  # 真 docker 也正是"自动带这几个"。所以照做。
+  # 代理分两路：kaniko 自己那份走 env；RUN 步骤那份必须走 --build-arg（kaniko 不把自身环境带进 RUN）
   for name in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy; do
     eval "v=\${$name:-}"
     [ -n "$v" ] && printf '%s\n' "--build-arg=$name=$v" >> "$dir/args"
   done
   [ -n "$merged_no" ] && printf '%s\n' "--build-arg=NO_PROXY=$merged_no" "--build-arg=no_proxy=$merged_no" >> "$dir/args"
   : > "$dir/go"                       # 准备就绪，kaniko 容器可以开工
-  log "已交给 kaniko 容器：$(tr '\n' ' ' < "$dir/args")"
+  log "构建交给同 Pod 的 kaniko 容器"
 
-  # 边等边把 kaniko 的输出流到 job 日志（1 秒粒度，不重复打印）
+  # 边等边把它的输出流到 job 日志（只追加，不重打）
   seen=0
   while [ ! -f "$dir/done" ]; do
     if [ -f "$dir/log" ]; then
@@ -154,9 +148,8 @@ submit() {
     n=$(wc -c < "$dir/log"); [ "$n" -gt "$seen" ] && tail -c +$((seen + 1)) "$dir/log"
   fi
   rc=$(cat "$dir/rc" 2>/dev/null || echo 1)
-  # build-push-action 会读 --metadata-file / --iidfile 来算它的 outputs（digest 等）：
-  # kaniko 的日志里有 "Pushed …@sha256:…"，据此写一份同样的元数据。
-  digest=$(grep -oE '@sha256:[0-9a-f]{64}' "$dir/log" 2>/dev/null | head -1 | tr -d '@')
+  # 官方 docker actions 靠 --metadata-file / --iidfile 拿 digest：取 kaniko 的 --digest-file
+  digest=$(tr -d '\n' < "$dir/digest" 2>/dev/null)
   tags=$(printf '%s' "${GRC_DEST:-${GRC_TAGS:-}}" | tr ' ' ',' | sed 's/^,*//; s/,*$//')
   if [ -n "$digest" ]; then
     [ -z "$iid" ] || printf '%s' "$digest" > "$iid"
@@ -187,7 +180,6 @@ case "$cmd" in
     mkdir -p "$(dirname "$CREDS")"
     auth=$(printf '%s:%s' "$user" "$pass" | base64 | tr -d '\n')
     printf '{"auths":{"%s":{"auth":"%s"}}}' "$host" "$auth" > "$CREDS"
-    log "凭据已写入 $CREDS（kaniko 容器读同一份）"
     ;;
 
   build|buildx)
