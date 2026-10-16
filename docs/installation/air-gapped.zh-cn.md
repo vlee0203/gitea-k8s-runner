@@ -262,6 +262,7 @@ action 下载与 checkout 也走它。只有这两种情况要执行 Pod 自己�
 | job 秒失败，报 `git clone … /<owner>/<repo>` | 目标实例缺这个 action 仓库（第二节没搬，或没搬你要用的 ref） |
 | `ImagePullBackOff` / `ErrImagePull` | 镜像没搬进内网仓库，或清单里地址没改全，或私有仓库缺 pull secret |
 | `x509: certificate signed by unknown authority` | 第四节：Gitea 用私 CA。controller 报 = 它的卷/`SSL_CERT_DIR` 没配；执行 Pod 报（kaniko 推镜像 / workflow 直连 Gitea API）= `EXECUTOR_CA_PATH` 没配，或它指的路径与 ① 挂的不是同一份 |
+| job 一直卡在 running、**一条日志都没有**，执行 Pod 也不自动删除 | 执行 Pod 的 runner 没能注册到 controller：`kubectl -n <ns> logs <pod> -c runner` 里是 `Invalid input … error="instance address is empty"`（无限重试）→ 这个池缺了上游 `run.sh` 注册要的 `GITEA_INSTANCE_URL`。**升级到 2026-10-16 之后的 controller 镜像**（`a860e90` 起两个名字都设，并给注册重试加了上界）；出现这类卡死先看这条日志，别等池的 `timeout` |
 | Pod 被驱逐，`exceeded its local ephemeral storage limit` | 命名空间 LimitRange 的默认值太小，池里没显式给 `ephemeralStorage` |
 | `cache` Deployment 一直 Pending | 没有可用 StorageClass（`cache.yaml` 是可选组件，直接跳过） |
 | workflow 里 `docker build` 卡住/找不到 kaniko | `KANIKO_IMAGE` 没换成内网地址 |

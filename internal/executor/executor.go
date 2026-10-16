@@ -399,8 +399,12 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 	if len(m.ca) > 0 {
 		secret.Data = map[string][]byte{caCrtKey: m.ca}
 	}
-	if _, err := m.cs.CoreV1().Secrets(m.namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create capability secret: %w", err)
+	created := true
+	if _, err := m.cs.CoreV1().Secrets(m.namespace).Create(ctx, secret, metav1.CreateOptions{}); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			return fmt.Errorf("create capability secret: %w", err)
+		}
+		created = false
 	}
 
 	env := []corev1.EnvVar{
@@ -521,8 +525,17 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 		}
 		injectCA(&pod.Spec, name, caImage)
 	}
-	if _, err := m.cs.CoreV1().Pods(m.namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create executor pod: %w", err)
+	if _, err := m.cs.CoreV1().Pods(m.namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			// Pod 建不出来（配额、校验失败……）时，刚建好的 assignment Secret 会留下 ——
+			// 没有 Pod 的它谁也读不到，只会一直挂在命名空间里（实测：一次配额拒绝留下一个）。
+			if created {
+				if derr := m.cs.CoreV1().Secrets(m.namespace).Delete(ctx, secret.Name, metav1.DeleteOptions{}); derr != nil {
+					log.Printf("executor: 回滚 %s 的 assignment Secret: %v", name, derr)
+				}
+			}
+			return fmt.Errorf("create executor pod: %w", err)
+		}
 	}
 	return nil
 }
