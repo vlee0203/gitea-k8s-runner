@@ -404,11 +404,21 @@ func (m *Manager) Start(ctx context.Context, s Spec) error {
 	}
 
 	env := []corev1.EnvVar{
+		// 两个名字指同一个地址，都不是笔误：
+		//   CONTROLLER_URL —— 我们自己的名字，injectRunner 的入口脚本（injectedEntrypoint）读它；
+		//   GITEA_INSTANCE_URL —— **上游 run.sh 读的名字**。非 injectRunner 的池直接跑镜像自带的
+		//     run.sh，它用 `--instance "${GITEA_INSTANCE_URL}"` 注册，缺了就一直重试
+		//     （"instance address is empty"）→ job 永不开始、没有任何日志、Pod 也不退出。
+		{Name: "GITEA_INSTANCE_URL", Value: s.ControllerURL},
 		{Name: "CONTROLLER_URL", Value: s.ControllerURL},
 		{Name: "GITEA_RUNNER_REGISTRATION_TOKEN_FILE", Value: "/etc/gkr/" + CapabilityKey},
 		{Name: "GITEA_RUNNER_LABELS", Value: strings.Join(s.Labels, ",")},
 		{Name: "GITEA_RUNNER_NAME", Value: runnerName(s)},
 		{Name: "GITEA_RUNNER_EPHEMERAL", Value: "true"},
+		// 上游 run.sh 的注册重试默认是**无限**的（GITEA_MAX_REG_ATTEMPTS 不设就一直转）：
+		// 一旦注册不上，Pod 会一直挂着、job 一直没日志，直到池的 timeout 才被收走。
+		// 给它一个上界（30×5s）：注册不上就该让这个 job 快速失败并删 Pod。
+		{Name: "GITEA_MAX_REG_ATTEMPTS", Value: "30"},
 	}
 	if s.RunnerConfig != "" {
 		env = append(env, corev1.EnvVar{Name: "CONFIG_FILE", Value: "/etc/gkr/" + ConfigKey})
