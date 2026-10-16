@@ -83,7 +83,6 @@ data:
           - x64
           - ubuntu-latest
           - ubuntu-24.04
-          - build
         image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-b2de794
         resources:
           cpu: '2'
