@@ -77,20 +77,21 @@ data:
   # 容器 image 与 RUNNER_IMAGE 那一处，三处保持一致。
   pools.yaml: |
     pools:
-    - labels:
-      - self-hosted
-      - linux
-      - x64
-      - ubuntu-latest
-      - ubuntu-24.04
-      - build
-      image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-b2de794
-      resources:
-        cpu: '2'
-        memory: 4Gi
-        ephemeralStorage: 10Gi
-      slots: 2
-      timeout: 1h
+      # labels 是「承诺」：声明了就要按那个环境跑，runs-on 命中是整串匹配
+      - labels:
+          - self-hosted
+          - linux
+          - x64
+          - ubuntu-latest
+          - ubuntu-24.04
+          - build
+        image: ghcr.io/vlee0203/gitea-runner-controller/runner:sha-b2de794
+        resources:
+          cpu: '2'
+          memory: 4Gi
+          ephemeralStorage: 10Gi
+        slots: 2
+        timeout: 1h
 ---
 apiVersion: apps/v1
 kind: Deployment
